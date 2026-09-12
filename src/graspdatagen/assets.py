@@ -345,6 +345,7 @@ def inspect_object(config: ObjectConfig) -> dict[str, Any]:
     surface = trimesh.util.concatenate(meshes)
     surface.apply_scale(unit)
     mass_api = UsdPhysics.MassAPI(body)
+    usd_mass = mass_api.GetMassAttr().Get()
     metadata = json.loads(config.metadata.read_text())["physics"]
     if not np.isclose(config.mass_kg, metadata["mass"]):
         raise ValueError("P1 manifest mass must explicitly select the supplied metadata mass")
@@ -376,7 +377,7 @@ def inspect_object(config: ObjectConfig) -> dict[str, Any]:
         "source_faces": len(surface.faces),
         "surface_prims": [str(p.GetPath()) for p in surfaces],
         "colliders": materials,
-        "usd_mass_kg": float(mass_api.GetMassAttr().Get()),
+        "usd_mass_kg": float(usd_mass) if usd_mass is not None else None,
         "metadata_physics": metadata,
         "resolved_mass_kg": config.mass_kg,
         "resolved_material": asdict(config.material),
