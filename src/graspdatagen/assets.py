@@ -445,19 +445,24 @@ def prepare_object(runtime: PhysxRuntime, config: ObjectConfig, cache_root: Path
         mass.CreateMassAttr(config.mass_kg)
         source_body = stage.GetPrimAtPath(inspection["body_prim"])
         source_mass = UsdPhysics.MassAPI(source_body)
-        com = np.asarray(source_mass.GetCenterOfMassAttr().Get(), dtype=np.float64)
-        inertia = np.asarray(source_mass.GetDiagonalInertiaAttr().Get(), dtype=np.float64)
-        if np.isfinite(com).all():
+
+        com_attr = source_mass.GetCenterOfMassAttr()
+        if com_attr.HasAuthoredValueOpinion():
+            com = np.asarray(com_attr.Get(), dtype=np.float64)
+            if com.shape != (3,) or not np.isfinite(com).all():
+                raise ValueError("Invalid authored centre of mass")
+
             from graspdatagen.geometry import transform_points
 
             resolved_com = (
                 transform_points(com[None, :], relative_transform(source_body, root))[0] * unit
             )
             mass.CreateCenterOfMassAttr(Gf.Vec3f(*resolved_com))
-        elif not np.isneginf(com).all():
-            raise ValueError("Invalid authored centre of mass")
-        if (inertia != 0).any():
-            if not np.isfinite(inertia).all() or (inertia <= 0).any():
+
+        inertia_attr = source_mass.GetDiagonalInertiaAttr()
+        if inertia_attr.HasAuthoredValueOpinion():
+            inertia = np.asarray(inertia_attr.Get(), dtype=np.float64)
+            if inertia.shape != (3,) or not np.isfinite(inertia).all() or (inertia <= 0).any():
                 raise ValueError("Invalid authored inertia")
             # P1 does not silently reinterpret inertia under a changed mass or body frame.
             if config.mass_kg != inspection["usd_mass_kg"] or source_body != root or unit != 1:
