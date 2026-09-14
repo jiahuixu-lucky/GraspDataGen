@@ -254,15 +254,35 @@ def retain_object_dependencies(stage: Usd.Stage) -> None:
     pending = list(roots)
     while pending:
         for prim in Usd.PrimRange(stage.GetPrimAtPath(pending.pop())):
-            targets = [target for rel in prim.GetRelationships() for target in rel.GetTargets()]
-            targets += [target for attr in prim.GetAttributes() for target in attr.GetConnections()]
-            for target in targets:
-                top = target.GetPrimPath().GetPrefixes()[0]
-                if top not in roots:
+            for rel in prim.GetRelationships():
+                for target in list(rel.GetTargets()):
+                    top = target.GetPrimPath().GetPrefixes()[0]
+                    if top in roots:
+                        continue
                     if not stage.GetPrimAtPath(top):
+                        if rel.GetName().startswith("material:binding"):
+                            print(
+                                f"P1: dropping unresolved material binding "
+                                f"{rel.GetPath()} -> {target}",
+                                flush=True,
+                            )
+                            rel.RemoveTarget(target)
+                            continue
                         raise ValueError(f"Missing selected-object dependency: {target}")
                     roots.add(top)
                     pending.append(top)
+
+            for attr in prim.GetAttributes():
+                for target in attr.GetConnections():
+                    top = target.GetPrimPath().GetPrefixes()[0]
+                    if top not in roots:
+                        if not stage.GetPrimAtPath(top):
+                            raise ValueError(
+                                f"Missing selected-object dependency: {target}"
+                            )
+                        roots.add(top)
+                        pending.append(top)
+
     for prim in list(stage.GetPseudoRoot().GetChildren()):
         if prim.GetPath() not in roots:
             stage.RemovePrim(prim.GetPath())
@@ -478,7 +498,12 @@ def prepare_object(runtime: PhysxRuntime, config: ObjectConfig, cache_root: Path
             transform = relative_transform(stage.GetPrimAtPath(item["collider"]), root)
             transform[:3, :] *= unit
             set_transform(prim, transform)
-            UsdShade.MaterialBindingAPI(prim).UnbindAllBindings()
+            # CopySpec may preserve material bindings on descendant GeomSubsets.
+            # Those bindings can target source-only materials that are not copied
+            # into object.usdc. Remove all source material bindings recursively;
+            # the prepared collider receives GraspDataGen's resolved material below.
+            for descendant in Usd.PrimRange(prim):
+                UsdShade.MaterialBindingAPI(descendant).UnbindAllBindings()
             collider_prims.append(prim)
         bind_material(prepared, collider_prims, config.material)
         prepared.GetRootLayer().Save()
