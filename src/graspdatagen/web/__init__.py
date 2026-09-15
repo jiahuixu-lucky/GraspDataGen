@@ -15,9 +15,9 @@ from fastapi import HTTPException
 from nicegui import app, run, ui
 
 from graspdatagen.config import load_objects
-from graspdatagen.web_data import load_dataset
+from graspdatagen.web.data import load_dataset
 
-STATIC = Path(__file__).with_name("web_static")
+STATIC = Path(__file__).with_name("static")
 
 
 def serve(
