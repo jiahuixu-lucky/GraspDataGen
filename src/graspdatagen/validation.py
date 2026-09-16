@@ -307,6 +307,16 @@ def validate(
             # This preserves the existing seven-stage output schema without
             # adding a physics step; all remaining ticks belong to inversion.
             observe(4 if step == 0 else 5, True, False)
+
+            if (failure[:, trial] != 0).all():
+                scene.force(zero_force)
+                print(
+                    f"P2 EARLY_EXIT trial={trial} stage=invert "
+                    f"step={step + 1}/{invert_steps}",
+                    flush=True,
+                )
+                print_stage_profile()
+                return
         scene.force(zero_force)
         stable[:] = 0
         for step in range(round(p.inverted_hold_s * p.steps_per_second)):
