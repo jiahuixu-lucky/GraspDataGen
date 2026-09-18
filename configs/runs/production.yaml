@@ -3,17 +3,17 @@ manifest: configs/objects/production.yaml
 cache: outputs/prepared
 output: outputs/production
 device: 0
-environments: 512
+environments: 1024
 seed: 20260908
 target_successes: 1024
 candidate_budget: 10240
 time_budget_s: 1800
 object_position_m: [0.25, 0.25, 0.25]
 sampling:
-  surface_samples: 4096
-  surface_rounds: 16
+  surface_samples: 16384
+  surface_rounds: 32
   rolls_per_contact: 8
-  normal_alignment_min: 0.90
+  normal_alignment_min: 0.95
   clearance_m: 0.003
   pregrasp_distance_m: 0.08
   collision_samples: 256

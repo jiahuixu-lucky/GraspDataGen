@@ -213,3 +213,6 @@ cython_debug/
 .cursorindexingignore
 bots/.thumbs/
 objects/cola.obj
+
+# Assets
+/Data
