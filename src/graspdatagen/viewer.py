@@ -70,8 +70,6 @@ class GraspViewer:
 
         self.runtime = runtime
         self.data = read_mapping(source)
-        if self.data["format"] != "graspdatagen.grasps.compact.v1":
-            raise ValueError("Unsupported compact grasp format")
         if self.data["position_unit"] != "m" or self.data["pose_layout"] != [
             "x",
             "y",

@@ -102,8 +102,6 @@ def load_dataset(
     from pxr import Usd, UsdGeom, UsdPhysics
 
     data = read_mapping(source)
-    if data["format"] != "graspdatagen.grasps.compact.v1":
-        raise ValueError("Unsupported grasp format")
     if data["position_unit"] != "m" or data["pose_layout"] != [
         "x",
         "y",

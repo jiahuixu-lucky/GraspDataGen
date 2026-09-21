@@ -16,14 +16,13 @@ from graspdatagen.config import ValidationProfile, digest
 from graspdatagen.geometry import matrix_poses, pose_matrices
 from graspdatagen.records import METRICS, STAGES, CandidateBatch, PreparedPair, ValidationBatch
 
-FORMAT = "graspdatagen.grasps.v2"
-POSE_FIELDS = {
-    "T_object_tcp_target": "pose_object_tcp_target_xyz_xyzw",
-    "T_object_tcp_pregrasp": "pose_object_tcp_pregrasp_xyz_xyzw",
-    "T_object_tcp": "pose_object_tcp_xyz_xyzw",
-    "T_object_tcp_trials": "pose_object_tcp_trials_xyz_xyzw",
-    "T_world_object_initial": "pose_world_object_initial_xyz_xyzw",
-}
+POSE_FIELDS = (
+    "pose_object_tcp_target_xyz_xyzw",
+    "pose_object_tcp_pregrasp_xyz_xyzw",
+    "pose_object_tcp_xyz_xyzw",
+    "pose_object_tcp_trials_xyz_xyzw",
+    "pose_world_object_initial_xyz_xyzw",
+)
 
 
 def sync_directory(directory: Path) -> None:
@@ -184,7 +183,6 @@ def export_grasps_yaml(directory: Path) -> Path:
     axes = pose_matrices(poses)[:, :3, :3] @ axis_tcp
     axes /= np.linalg.norm(axes, axis=1, keepdims=True)
     data = {
-        "format": "graspdatagen.grasps.compact.v1",
         "object": manifest["object"]["name"],
         "position_unit": "m",
         "pose_layout": manifest["coordinates"]["pose_layout"],
@@ -219,9 +217,7 @@ def export_grasps_yaml(directory: Path) -> Path:
 
 
 def read_shards(directory: Path, manifest: dict[str, Any]) -> dict[str, np.ndarray]:
-    """Read committed data for replay or resume; v1 is read only for existing P2 evidence."""
-    if manifest["format"] not in (FORMAT, "graspdatagen.grasps.v1"):
-        raise ValueError("Unsupported grasp dataset format")
+    """Read committed numeric shards for replay or resume."""
     parts: list[dict[str, np.ndarray]] = []
     for shard in manifest["shards"]:
         path = directory / shard["path"]
@@ -242,9 +238,6 @@ def read_shards(directory: Path, manifest: dict[str, Any]) -> dict[str, np.ndarr
                 raise ValueError(f"Invalid shard array: {key}")
         if (part["trial_failure_code"] != 0).any() or (part["stage_status"] != 1).any():
             raise ValueError("Formal dataset contains an unvalidated grasp")
-        if manifest["format"] == "graspdatagen.grasps.v1":
-            for old, new in POSE_FIELDS.items():
-                part[new] = matrix_poses(part.pop(old))
         count = len(part["candidate_id"])
         trials = manifest["protocol"]["trials"]
         dofs = part["pregrasp_joint_positions_m"].shape[-1]
@@ -266,7 +259,7 @@ def read_shards(directory: Path, manifest: dict[str, Any]) -> dict[str, np.ndarr
                 3,
             ),
         }
-        if set(part) != set(shapes) | set(POSE_FIELDS.values()):
+        if set(part) != set(shapes) | set(POSE_FIELDS):
             raise ValueError("Formal shard fields differ from the numeric schema")
         for key, shape in shapes.items():
             dtype = (
@@ -280,7 +273,7 @@ def read_shards(directory: Path, manifest: dict[str, Any]) -> dict[str, np.ndarr
                 raise ValueError(f"Invalid formal array: {key}")
         if (part["candidate_id"] <= 0).any():
             raise ValueError("Candidate IDs must be positive")
-        for key in POSE_FIELDS.values():
+        for key in POSE_FIELDS:
             shape = (count, trials, 7) if key == "pose_object_tcp_trials_xyz_xyzw" else (count, 7)
             if part[key].shape != shape or part[key].dtype != np.float64:
                 raise ValueError(f"Invalid pose field: {key}")

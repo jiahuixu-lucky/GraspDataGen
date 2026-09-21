@@ -6,7 +6,7 @@ All translations use metres; time, mass, force and angle use s, kg, N and rad.
 `T_A_B` maps column-vector coordinates from B to A. Quaternions are unit `xyzw`
 with canonical sign. Public poses are seven numeric values, not matrices.
 
-| v2 field | Shape | Meaning |
+| Field | Shape | Meaning |
 | --- | --- | --- |
 | `pose_object_tcp_xyz_xyzw` | `(N, 7)` | Actual stable closure in trial 0 |
 | `pose_object_tcp_trials_xyz_xyzw` | `(N, trials, 7)` | Actual stable closure in every trial |
@@ -98,9 +98,9 @@ release after all combinations; fresh-process replay has a separate report.
 Replay starts from saved pregrasp/target poses and joint commands and reruns every
 trial. It does not teleport directly to a final holding pose.
 
-Generation uses version `graspdatagen.grasps.v2`. Existing P2 v1 evidence has a
-read-only replay conversion; v1 cannot be appended to. Earlier legacy OBJ/YAML/NPZ
-outputs are not accepted as new successful data.
+Dataset manifests and exported YAML have no format-version field. Readers use
+the documented fields directly and check numeric shapes, units, finite values,
+asset identities and shard integrity. Historical matrix pose fields are not converted.
 
 Committed checkpoints record sampling progress and unique successes. Resume
 validates identities and checksums, restores committed deduplication state, and

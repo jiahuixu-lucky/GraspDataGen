@@ -20,7 +20,6 @@ from graspdatagen.records import FAILURES, METRICS, STAGES, PreparedPair
 from graspdatagen.runtime import GraspScene, PhysxRuntime, RuntimeConfig
 from graspdatagen.sampling import Sampler, distinct_indices
 from graspdatagen.storage import (
-    FORMAT,
     commit_checkpoint,
     durable_json,
     empty_result_arrays,
@@ -143,7 +142,7 @@ def generate_pair(
     manifest_path = directory / "manifest.json"
     if manifest_path.exists():
         manifest = json.loads(manifest_path.read_text())
-        if manifest["format"] != FORMAT or manifest["run_id"] != run_id:
+        if manifest["run_id"] != run_id:
             raise ValueError(f"Resume configuration, implementation or asset mismatch: {directory}")
         arrays = read_shards(directory, manifest)
         if manifest["status"] != "running":
@@ -155,7 +154,6 @@ def generate_pair(
         successful = np.empty((0, 4, 4))
         joints = np.empty((0, len(pair.definition["joint_names"])))
         manifest = {
-            "format": FORMAT,
             "run_id": run_id,
             "status": "running",
             "stop_reason": "",
