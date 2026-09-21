@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import time
+from collections import Counter
 from dataclasses import asdict
+from hashlib import sha256
 from pathlib import Path
 
 import numpy as np
 import trimesh
 from scipy.spatial.transform import Rotation
+from scipy.stats import qmc
 
 from graspdatagen.assets import file_hash
 from graspdatagen.config import PostureConfig, SamplingConfig, digest
@@ -207,16 +210,28 @@ class Sampler:
         self.rejected: int = 0
         self.consumed: int = 0
         self.posture_rejected: int = 0
+        self.candidate_duplicates: int = 0
+        self.coverage_deferrals: int = 0
+        self.visits: Counter[tuple[int, ...]] = Counter()
+        self.successful_visits: Counter[tuple[int, ...]] = Counter()
+        self.seen: set[bytes] = set()
 
     def _contacts(self) -> CandidateBatch:
         c = self.config
-        seed = int(digest([self.seed, self.round_index])[:16], 16)
-        points, faces = trimesh.sample.sample_surface(
-            self.surface,
-            c.surface_samples,
-            face_weight=self.region_weights,
-            seed=seed,
+        # Continue the same scrambled sequence across rounds: area, triangle
+        # barycentrics and roll phase cover their domains without IID clusters.
+        sequence = qmc.Sobol(d=4, scramble=True, seed=self.seed)
+        if self.round_index:
+            sequence.fast_forward(self.round_index * c.surface_samples)
+        samples = sequence.random(c.surface_samples)
+        weights = self.surface.area_faces if self.region_weights is None else self.region_weights
+        cumulative = np.cumsum(weights)
+        faces = np.searchsorted(cumulative, samples[:, 0] * cumulative[-1], side="right")
+        root = np.sqrt(samples[:, 1])
+        barycentric = np.column_stack(
+            (1 - root, root * (1 - samples[:, 2]), root * samples[:, 2])
         )
+        points = np.einsum("ni,nij->nj", barycentric, self.surface.triangles[faces])
         normals = self.surface.face_normals[faces]
         epsilon = self.radius * 1e-5
         hit = self.source.rays(points - epsilon * normals, -normals, self.radius)
@@ -232,7 +247,7 @@ class Sampler:
         centers = points[indices] - 0.5 * widths[indices, None] * n
         tangent = np.cross(n, np.eye(3)[np.abs(n).argmin(axis=1)])
         tangent /= np.linalg.norm(tangent, axis=1)[:, None]
-        phase = np.random.default_rng(seed).uniform(0, 2 * np.pi, c.surface_samples)
+        phase = samples[:, 3] * (2 * np.pi)
         angles = phase[indices] + np.tile(np.arange(c.rolls_per_contact), valid.sum()) * (
             2 * np.pi / c.rolls_per_contact
         )
@@ -286,9 +301,82 @@ class Sampler:
             np.tile(self.pair.arrays["joint_positions_m"][-1], (len(ids), 1)),
             np.full(len(ids), self.pair.definition["closed_command_m"]),
         )
-        # Shorter COM lever arms reduce the contact torque needed during holds.
+        # Visit different contact locations before taking more rolls at the same
+        # location. COM distance breaks ties rather than monopolizing the budget.
+        cells = np.floor(centers / c.dedup_translation_m).astype(np.int64)
+        _, groups, counts = np.unique(cells, axis=0, return_inverse=True, return_counts=True)
+        grouped = np.argsort(groups, kind="stable")
+        ranks = np.empty(len(groups), dtype=np.int64)
+        ranks[grouped] = np.arange(len(groups)) - np.repeat(np.cumsum(counts) - counts, counts)
         com = np.asarray(self.pair.object_manifest["physical"]["com_pose_xyzw"][:3])
-        return batch.select(np.argsort(np.linalg.norm(centers - com, axis=1), kind="stable"))
+        return batch.select(np.lexsort((np.linalg.norm(centers - com, axis=1), ranks)))
+
+    def coverage(self, batch: CandidateBatch) -> tuple[np.ndarray, np.ndarray]:
+        """Grid cells schedule revisits; they never replace actual-pose deduplication.
+
+        Translation/opening use the output resolution; quaternion bins use its
+        corresponding chord length. Cell boundaries only affect exploration order.
+        With fixed pair/config, target and width determine all approach commands,
+        so their exact bytes identify repeated inputs independently of candidate IDs.
+        """
+        c = self.config
+        quaternions = Rotation.from_matrix(batch.target[:, :3, :3]).as_quat(canonical=True)
+        descriptors = np.column_stack(
+            (
+                batch.target[:, :3, 3] / c.dedup_translation_m,
+                quaternions / (2 * np.sin(min(c.dedup_rotation_rad, np.pi) / 4)),
+                batch.contact_width / c.dedup_opening_m,
+            )
+        )
+        cells = np.floor(descriptors).astype(np.int64)
+        signatures = np.empty((len(batch), sha256().digest_size), dtype=np.uint8)
+        for i in range(len(batch)):
+            signature = sha256(batch.target[i].tobytes() + batch.contact_width[i].tobytes())
+            signatures[i] = np.frombuffer(signature.digest(), dtype=np.uint8)
+        return cells, signatures
+
+    def available(self, cell: tuple[int, ...], signature: bytes) -> bool:
+        """Reserve one exploration visit per cell/round; successes slow revisits.
+
+        Failed neighborhoods can be sampled again next round. Each successful
+        visit spends an additional round of priority, favoring uncovered regions
+        without permanently excluding nearby poses that may close differently.
+        """
+        if signature in self.seen:
+            self.candidate_duplicates += 1
+            return False
+        if self.visits[cell] + self.successful_visits[cell] > self.round_index:
+            self.coverage_deferrals += 1
+            return False
+        return True
+
+    def record(self, batch: CandidateBatch, successful: np.ndarray) -> dict[str, np.ndarray]:
+        """Persist every attempted input, including failures and duplicate successes."""
+        cells, signatures = self.coverage(batch)
+        self.successful_visits.update(tuple(cell) for cell in cells[successful])
+        return {"cells": cells, "signatures": signatures, "successful": successful}
+
+    def restore(self, history: dict[str, np.ndarray]) -> None:
+        """Rebuild only acknowledged visits; uncommitted candidates are retried."""
+        count = len(history["successful"])
+        expected = {
+            "cells": ((count, 8), np.dtype(np.int64)),
+            "signatures": ((count, sha256().digest_size), np.dtype(np.uint8)),
+            "successful": ((count,), np.dtype(np.bool_)),
+        }
+        if set(history) != set(expected) or any(
+            history[key].shape != shape or history[key].dtype != dtype
+            for key, (shape, dtype) in expected.items()
+        ):
+            raise ValueError("Invalid sampling history arrays")
+        signatures = [row.tobytes() for row in history["signatures"]]
+        if len(set(signatures)) != count or self.seen.intersection(signatures):
+            raise ValueError("Sampling history contains duplicate attempts")
+        self.seen.update(signatures)
+        self.visits.update(tuple(cell) for cell in history["cells"])
+        self.successful_visits.update(
+            tuple(cell) for cell in history["cells"][history["successful"]]
+        )
 
     def take(self, count: int, deadline: float) -> CandidateBatch:
         """Choose the widest calibrated opening whose entire sampled approach is clear.
@@ -317,6 +405,18 @@ class Sampler:
             upright = posture_mask(batch.target, self.pair, self.posture)
             self.posture_rejected += int((~upright).sum())
             batch = batch.select(np.flatnonzero(upright))
+            if not len(batch):
+                continue
+            cells, signatures = self.coverage(batch)
+            explore = np.array(
+                [
+                    i for i in range(len(batch))
+                    if self.available(tuple(cells[i]), signatures[i].tobytes())
+                ],
+                dtype=np.int64,
+            )
+            batch = batch.select(explore)
+            cells, signatures = cells[explore], signatures[explore]
             base = batch.target @ np.linalg.inv(self.pair.arrays["T_B_tcp"])
             displacement = batch.pregrasp[:, :3, 3] - batch.target[:, :3, 3]
             chosen = np.full(len(batch), -1, dtype=np.int64)
@@ -344,12 +444,20 @@ class Sampler:
                         break
                 chosen[pending[clear]] = state
             keep = np.flatnonzero(chosen >= 0)
+            self.rejected += len(batch) - len(keep)
+            diverse: list[int] = []
+            for i in keep:
+                cell, signature = tuple(cells[i]), signatures[i].tobytes()
+                if self.available(cell, signature):
+                    self.visits[cell] += 1
+                    self.seen.add(signature)
+                    diverse.append(int(i))
+            keep = np.asarray(diverse, dtype=np.int64)
             kept = batch.select(keep)
             kept.opening[:] = self.pair.arrays["opening_m"][chosen[keep]]
             kept.pregrasp_joints[:] = self.pair.arrays["joint_positions_m"][chosen[keep]]
             accepted.append(kept)
             total += len(kept)
-            self.rejected += len(batch) - len(kept)
         if not accepted:
             return self.raw.select(np.empty(0, dtype=np.int64))
         return CandidateBatch(

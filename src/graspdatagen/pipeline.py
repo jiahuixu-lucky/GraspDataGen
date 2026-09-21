@@ -194,15 +194,21 @@ def generate_pair(
             "elapsed_s": 0.0,
             "resume_count": 0,
             "sampling_state": {"round": 0, "cursor": 0},
+            "sampling_shards": [],
+            "candidate_duplicates": 0,
+            "coverage_deferrals": 0,
             "geometric_rejections": 0,
             "posture_rejections": 0,
             "surface_candidates_consumed": 0,
         }
         commit_checkpoint(directory, manifest)
-    referenced = {shard["path"] for shard in manifest["shards"]}
-    for orphan in directory.glob("grasps-*"):
-        if orphan.name not in referenced:
-            orphan.unlink()
+    referenced = {
+        shard["path"] for shard in manifest["shards"] + manifest["sampling_shards"]
+    }
+    for pattern in ("grasps-*", "sampling-*"):
+        for orphan in directory.glob(pattern):
+            if orphan.name not in referenced:
+                orphan.unlink()
     elapsed = manifest["elapsed_s"]
     deadline = started + max(0, config.time_budget_s - elapsed)
     state = manifest["sampling_state"]
@@ -216,6 +222,14 @@ def generate_pair(
         state["round"],
         state["cursor"],
     )
+    for shard in manifest["sampling_shards"]:
+        path = directory / shard["path"]
+        if file_hash(path) != shard["sha256"]:
+            raise ValueError(f"Corrupt sampling history: {path}")
+        with np.load(path, allow_pickle=False) as history:
+            sampler.restore({key: history[key] for key in history.files})
+    if len(sampler.seen) != manifest["attempted"]:
+        raise ValueError("Sampling history disagrees with attempted candidate count")
     scene = GraspScene(runtime, pair, config.environments, config.validation)
     failures: Counter[str] = Counter(manifest["failures"])
     active = pair.definition["calibration"]["active_index"]
@@ -227,6 +241,8 @@ def generate_pair(
     prior_consumed = manifest["surface_candidates_consumed"]
     prior_rejected = manifest["geometric_rejections"]
     prior_posture = manifest["posture_rejections"]
+    prior_duplicates = manifest["candidate_duplicates"]
+    prior_deferrals = manifest["coverage_deferrals"]
     while (
         len(successful) < config.target_successes
         and manifest["attempted"] < config.candidate_budget
@@ -240,6 +256,8 @@ def generate_pair(
             geometric_rejections=prior_rejected + sampler.rejected,
             posture_rejections=prior_posture + sampler.posture_rejected,
             surface_candidates_consumed=prior_consumed + sampler.consumed,
+            candidate_duplicates=prior_duplicates + sampler.candidate_duplicates,
+            coverage_deferrals=prior_deferrals + sampler.coverage_deferrals,
         )
         if not len(batch):
             manifest["stop_reason"] = (
@@ -268,6 +286,9 @@ def generate_pair(
                 posture_diagnostic, result_arrays(result, passed[np.flatnonzero(~legal)[:1]])
             )
         passed = passed[legal]
+        successful_inputs = np.zeros(len(batch), dtype=np.bool_)
+        successful_inputs[passed] = True
+        sampling_history = sampler.record(batch, successful_inputs)
         measured_openings = np.interp(
             result.actual_joints[:, 0, active], commands[order], pair.arrays["opening_m"][order]
         )
@@ -284,6 +305,9 @@ def generate_pair(
             directory / f"grasps-{batch_number:05d}.npz", result_arrays(result, accepted)
         )
         manifest["shards"].append(shard)
+        manifest["sampling_shards"].append(
+            write_arrays(directory / f"sampling-{batch_number:05d}.npz", sampling_history)
+        )
         for i in np.flatnonzero(~result.passed):
             trial = int(np.flatnonzero(result.failure[i])[0])
             code = FAILURES[result.failure[i, trial]]
@@ -313,6 +337,8 @@ def generate_pair(
         print(
             f"P3 {directory.name}: {len(successful)}/{config.target_successes}; "
             f"attempted={manifest['attempted']}; round={sampler.round_index}; "
+            f"duplicates={manifest['duplicates']}; "
+            f"coverage_deferrals={manifest['coverage_deferrals']}; "
             f"elapsed={manifest['elapsed_s']:.1f}s",
             flush=True,
         )
