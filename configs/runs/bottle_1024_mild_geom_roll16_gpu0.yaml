@@ -31,7 +31,6 @@ posture:
   min_wrist_up_dot: 0.0
   bottom_clearance_m: 0.002
 validation:
-  version: graspdatagen.free_space.v2
   solver_type: TGS
   external_forces_every_iteration: false
   solve_articulation_contact_last: true

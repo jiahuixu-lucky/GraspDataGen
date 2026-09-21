@@ -219,7 +219,6 @@ def load_gripper(path: Path) -> GripperConfig:
 
 @dataclass(frozen=True)
 class ValidationProfile:
-    version: str
     solver_type: str
     external_forces_every_iteration: bool
     solve_articulation_contact_last: bool
@@ -254,11 +253,8 @@ class ValidationProfile:
     disturbance_acceleration_m_s2: float
 
     def __post_init__(self) -> None:
-        if not self.version:
-            raise ValueError("Protocol version must be nonempty")
         for name, value in vars(self).items():
             if name not in (
-                "version",
                 "solver_type",
                 "external_forces_every_iteration",
                 "solve_articulation_contact_last",
