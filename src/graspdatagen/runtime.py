@@ -774,11 +774,10 @@ class GraspScene:
             self.force_buffer, None, None, self.gpu_indices, True
         )
 
-    def read(self) -> dict[str, np.ndarray]:
-        import numpy as np
+    def capture(self) -> wp.array:
+        """Pack the current PhysX state on CUDA; the next capture reuses this buffer."""
         import warp as wp
 
-        from graspdatagen.geometry import pose_matrices
         from graspdatagen.kernels import pack_grasp_state
 
         wp.launch(
@@ -798,7 +797,18 @@ class GraspScene:
             outputs=[self.state_buffer],
             device=self.device,
         )
-        values = self.state_buffer.numpy().astype(np.float64)
+        return self.state_buffer
+
+    def read(self) -> dict[str, np.ndarray]:
+        """Read a host snapshot for diagnostics; validation consumes capture() on CUDA."""
+        return self.decode(self.capture().numpy().astype("float64"))
+
+    def decode(self, values: FloatArray) -> dict[str, np.ndarray]:
+        """Decode a packed host snapshot, including stored validation trace frames."""
+        import numpy as np
+
+        from graspdatagen.geometry import pose_matrices
+
         if not np.isfinite(values).all():
             raise RuntimeError("Nonfinite PhysX state: solver_invalid")
         contact_offset = 20 + 2 * self.dofs

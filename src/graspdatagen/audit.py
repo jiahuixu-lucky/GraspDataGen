@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
@@ -14,6 +14,9 @@ from graspdatagen.records import FAILURES, PreparedPair
 from graspdatagen.runtime import GraspScene, PhysxRuntime
 from graspdatagen.storage import candidates_from_arrays, load_dataset, result_arrays, write_arrays
 from graspdatagen.validation import trial_conditions, validate
+
+if TYPE_CHECKING:
+    import warp as wp
 
 CASES = (
     "empty",
@@ -73,10 +76,13 @@ class SingleFingerScene(GraspScene):
         super().reset(object_poses, base_poses, joints)
         self.force(np.zeros((1, 3)))
 
-    def read(self) -> dict[str, np.ndarray]:
-        state = super().read()
+    def capture(self) -> wp.array:
+        # This one-environment audit records both finger peaks on every tick,
+        # including ticks after rejection; production capture has no host readback.
+        state = super().capture()
+        contact_offset = 20 + 2 * self.dofs
         self.finger_peaks[self.trial] = np.maximum(
-            self.finger_peaks[self.trial], state["contact"][0, :2]
+            self.finger_peaks[self.trial], state.numpy()[0, contact_offset : contact_offset + 2]
         )
         return state
 
