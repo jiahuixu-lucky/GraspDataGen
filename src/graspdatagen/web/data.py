@@ -42,8 +42,8 @@ def surface_payload(root: Any, frame: Any) -> list[dict[str, Any]]:
     for prim in visual or visible:
         mesh = mesh_in_frame(prim, frame)
         item: dict[str, Any] = {
-            "vertices": mesh.vertices.ravel().tolist(),
-            "faces": mesh.faces.ravel().tolist(),
+            "vertices": np.asarray(mesh.vertices).ravel(),
+            "faces": np.asarray(mesh.faces).ravel(),
             "color": [0.62, 0.66, 0.69],
             "representation": "visual" if visual else "collision",
         }
@@ -63,7 +63,7 @@ def surface_payload(root: Any, frame: Any) -> list[dict[str, Any]]:
                     coordinates = np.asarray(uv.ComputeFlattened())
                     interpolation = uv.GetInterpolation()
                     if interpolation == "vertex":
-                        item["uv"] = coordinates.ravel().tolist()
+                        item["uv"] = coordinates.ravel()
                     elif interpolation == "faceVarying":
                         counts = UsdGeom.Mesh(prim).GetFaceVertexCountsAttr().Get()
                         # Preserve USD face-corner UVs by splitting triangle vertices.
@@ -72,14 +72,14 @@ def surface_payload(root: Any, frame: Any) -> list[dict[str, Any]]:
                         if UsdGeom.Mesh(prim).GetHoleIndicesAttr().Get():
                             continue
                         faces = np.asarray(mesh.faces)
-                        item["vertices"] = np.asarray(mesh.vertices)[faces].ravel().tolist()
-                        item["faces"] = list(range(faces.size))
+                        item["vertices"] = np.asarray(mesh.vertices)[faces].ravel()
+                        item["faces"] = np.arange(faces.size, dtype=np.uint32)
                         original = np.asarray(
                             UsdGeom.Mesh(prim).GetFaceVertexIndicesAttr().Get()
                         ).reshape(-1, 3)
                         if not np.array_equal(original, faces):
                             coordinates = coordinates.reshape(-1, 3, 2)[:, ::-1].reshape(-1, 2)
-                        item["uv"] = coordinates.ravel().tolist()
+                        item["uv"] = coordinates.ravel()
                     else:
                         continue
                     resolved = texture.resolvedPath
@@ -146,8 +146,8 @@ def load_dataset(
                 geometry["surface_faces"], dtype=np.int64
             )
         annotation_mesh = {
-            "vertices": annotation_vertices.ravel().tolist(),
-            "faces": annotation_faces.ravel().tolist(),
+            "vertices": annotation_vertices.ravel(),
+            "faces": annotation_faces.ravel(),
         }
 
         provenance = "Prepared assets"
@@ -190,8 +190,8 @@ def load_dataset(
                     process=False,
                 ).simplify_quadric_decimation(face_count=overview_faces)
                 mesh["overview"] = {
-                    "vertices": overview.vertices.ravel().tolist(),
-                    "faces": overview.faces.ravel().tolist(),
+                    "vertices": np.asarray(overview.vertices).ravel(),
+                    "faces": np.asarray(overview.faces).ravel(),
                 }
         parts.append({"name": body.GetName(), "meshes": meshes, "matrices": []})
     inverse_tcp = np.linalg.inv(tcp)

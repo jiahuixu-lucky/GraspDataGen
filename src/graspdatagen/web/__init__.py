@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import gzip
 import json
 import logging
 from functools import lru_cache
@@ -10,14 +11,16 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from fastapi import HTTPException
+from fastapi import HTTPException, Request, Response
 from nicegui import app, run, ui
 
 from graspdatagen.config import load_objects
 from graspdatagen.web.data import load_dataset
 from graspdatagen.web.file_picker import pick_dataset
+from graspdatagen.web.transport import encode_payload
 
 STATIC = Path(__file__).with_name("static")
+LOAD_TIMEOUT_SECONDS = 60
 
 
 def serve(
@@ -35,15 +38,41 @@ def serve(
     def dataset(source: Path) -> dict[str, Any]:
         return load_dataset(source, objects, grippers, overview_faces)
 
-    @app.get("/grasp-data/{index}")
-    async def grasp_data(index: int) -> dict[str, Any]:
+    def dataset_response(index: int, annotation: bool, gzip_enabled: bool) -> Response:
         if not 0 <= index < len(available_sources):
             raise HTTPException(404, "Dataset not found")
         try:
-            return await run.io_bound(dataset, available_sources[index])
+            loaded = dataset(available_sources[index])
+            if annotation:
+                payload = {"annotation_mesh": loaded["annotation_mesh"]}
+            else:
+                payload = {key: value for key, value in loaded.items() if key != "annotation_mesh"}
+                payload["has_annotation"] = loaded["annotation_mesh"] is not None
+            content = encode_payload(payload)
+            headers = {"Vary": "Accept-Encoding"}
+            if gzip_enabled:
+                content = gzip.compress(content, compresslevel=1, mtime=0)
+                headers["Content-Encoding"] = "gzip"
+            # An explicit encoding also bypasses NiceGUI's synchronous gzip
+            # middleware, which would otherwise compress on the event loop.
+            return Response(content, headers=headers, media_type="application/octet-stream")
         except Exception as error:
             logging.exception("Cannot load grasp dataset %s", available_sources[index])
             raise HTTPException(422, str(error)) from error
+
+    @app.get("/grasp-data/{index}")
+    async def grasp_data(index: int, request: Request) -> Response:
+        # Both asset loading and serialization run off the event loop so the UI
+        # can report progress, handle disconnects and show timeouts during loading.
+        return await run.io_bound(
+            dataset_response, index, False, "gzip" in request.headers.get("Accept-Encoding", "")
+        )
+
+    @app.get("/grasp-data/{index}/annotation")
+    async def annotation_data(index: int, request: Request) -> Response:
+        return await run.io_bound(
+            dataset_response, index, True, "gzip" in request.headers.get("Accept-Encoding", "")
+        )
 
     @ui.page("/")
     async def index() -> None:
@@ -72,10 +101,21 @@ def serve(
                 available_sources[int(dataset_select.value)].parent, open_dataset
             )
 
-        async def command(method: str, *args: Any) -> Any:
-            return await ui.run_javascript(
-                f"window.graspViewer.{method}(...{json.dumps(args)})", timeout=60
+        async def javascript(expression: str) -> Any:
+            # NiceGUI 2.x does not send rejected JS promises back to Python.
+            # Return errors explicitly rather than waiting for its RPC timeout.
+            reply = await ui.run_javascript(
+                "(async () => { try { return {value: await (" + expression
+                + ") ?? null}; } catch (error) { "
+                "return {error: error.message || String(error)}; } })()",
+                timeout=LOAD_TIMEOUT_SECONDS + 10,
             )
+            if "error" in reply:
+                raise ValueError(reply["error"])
+            return reply["value"]
+
+        async def command(method: str, *args: Any) -> Any:
+            return await javascript(f"window.graspViewer.{method}(...{json.dumps(args)})")
 
         async def select(value: int) -> None:
             if not state["ready"]:
@@ -106,13 +146,27 @@ def serve(
                 visible_count.set_text(str(len(state["candidates"]) if mode.value == "all" else 1))
 
         async def workspace_changed() -> None:
-            if state["ready"]:
+            if not state["ready"]:
+                return
+            dataset_select.set_enabled(False)
+            dataset_open.set_enabled(False)
+            workspace_mode.set_enabled(False)
+            loading.set_visibility(True)
+            try:
                 await command("workspace", workspace_mode.value)
                 status.set_text(
                     "Region annotation"
                     if workspace_mode.value == "annotate"
                     else "Scene ready"
                 )
+            except Exception as error:
+                workspace_mode.set_value("preview")
+                ui.notify(str(error), type="negative", timeout=0, close_button=True)
+            finally:
+                loading.set_visibility(False)
+                dataset_select.set_enabled(True)
+                dataset_open.set_enabled(True)
+                workspace_mode.set_enabled(True)
 
         async def save_region() -> None:
             if not state["ready"]:
@@ -183,19 +237,23 @@ def serve(
 
         async def load() -> None:
             state.update(ready=False, playing=False)
+            retry.set_visibility(False)
             play.props("icon=play_arrow")
             controls.style("pointer-events: none; opacity: 0.5")
             dataset_select.set_enabled(False)
             dataset_open.set_enabled(False)
             loading.set_visibility(True)
             status.set_text("Loading assets")
+            loading_message.set_text("Loading assets")
             try:
                 dataset_index = int(dataset_select.value)
                 metadata = await command("load", dataset_index)
-                state.update(candidates=metadata["candidates"], ready=True)
+                state.update(candidates=metadata["candidates"])
 
                 loaded = await run.io_bound(dataset, available_sources[dataset_index])
                 annotation = loaded.get("annotation_mesh")
+                if annotation is None:
+                    workspace_mode.set_value("preview")
                 existing = grasp_regions / f"{loaded['object']}.npz"
 
                 allowed_faces: list[int] = []
@@ -244,19 +302,45 @@ def serve(
                 candidate_input.update()
                 scrubber._props["max"] = max(1, len(state["candidates"]) - 1)
                 scrubber.update()
+                state["ready"] = True
                 await select(0)
                 await mode_changed()
                 await appearance()
-                status.set_text("Scene ready")
+                status.set_text(
+                    "Region annotation" if workspace_mode.value == "annotate" else "Scene ready"
+                )
                 controls.style("pointer-events: auto; opacity: 1")
             except Exception as error:
                 state["ready"] = False
                 status.set_text("Load failed")
-                ui.notify(str(error), type="negative", timeout=0, close_button=True)
+                retry.set_visibility(True)
+                ui.run_javascript("window.graspViewer.cancelLoad()")
+                ui.notify(
+                    str(error) or "The viewer timed out. Retry or select another file.",
+                    type="negative", timeout=0, close_button=True,
+                )
             finally:
                 loading.set_visibility(False)
                 dataset_select.set_enabled(True)
                 dataset_open.set_enabled(True)
+
+        async def initialize() -> None:
+            loading.set_visibility(True)
+            retry.set_visibility(False)
+            loading_message.set_text("Initializing 3D viewer")
+            try:
+                await javascript(
+                    "window.graspViewer ? true : "
+                    f"!!(window.graspViewer = await createGraspViewer({scene.id}, "
+                    f"{LOAD_TIMEOUT_SECONDS * 1000}))"
+                )
+            except Exception as error:
+                status.set_text("Viewer initialization failed")
+                loading.set_visibility(False)
+                retry.set_visibility(True)
+                ui.notify(str(error), type="negative", timeout=0, close_button=True)
+                return
+            await load()
 
         with ui.header().classes("app-header"):
             with ui.row().classes("brand"):
@@ -266,6 +350,10 @@ def serve(
             with ui.row().classes("header-status"):
                 ui.element("span").classes("status-dot")
                 status = ui.label("Connecting").classes("muted")
+                retry = ui.button("Retry", icon="refresh", on_click=initialize).props(
+                    "flat no-caps"
+                )
+                retry.set_visibility(False)
         with ui.element("main").classes("workspace"):
             with ui.column().classes("sidebar"):
                 ui.label("DATASET").classes("eyebrow")
@@ -405,7 +493,7 @@ def serve(
                     scene = ui.scene(grid=False, background_color="#edf0f2").classes("main-scene")
                     with ui.column().classes("loading-overlay") as loading:
                         ui.spinner(size="32px")
-                        ui.label("Loading scene")
+                        loading_message = ui.label("Initializing 3D viewer")
                     with ui.row().classes("viewport-legend"):
                         ui.element("span").classes("swatch selected-swatch")
                         ui.label("Selected grasp")
@@ -436,11 +524,9 @@ def serve(
                     ui.label("Grasp pose inspection")
                     ui.label("XYZ / XYZW  ·  Z-UP")
         scene.on("grasp_pick", lambda event: select(int(event.args)))
+        scene.on("load_progress", lambda event: loading_message.set_text(event.args))
         await ui.context.client.connected(timeout=30)
-        await ui.run_javascript(
-            f"window.graspViewer = await createGraspViewer({scene.id})", timeout=30
-        )
-        await load()
+        await initialize()
         ui.timer(0.9, tick)
 
     ui.run(

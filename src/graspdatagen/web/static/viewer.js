@@ -1,4 +1,4 @@
-async function createGraspViewer(id) {
+async function createGraspViewer(id, timeoutMs) {
   const THREE = await import('three');
   const element = getElement(id);
   for (let i = 0; !element.is_initialized && i < 300; i++) {
@@ -10,6 +10,8 @@ async function createGraspViewer(id) {
   scene.add(content);
   let data = null;
   let selected = 0;
+  let datasetIndex = 0;
+  let loadController = new AbortController();
   let displayMode = 'all';
   let groups = [];
   let objectGroup = new THREE.Group();
@@ -30,9 +32,9 @@ async function createGraspViewer(id) {
 
   function geometry(mesh) {
     const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.Float32BufferAttribute(mesh.vertices, 3));
-    geometry.setIndex(mesh.faces);
-    if (mesh.uv) geometry.setAttribute('uv', new THREE.Float32BufferAttribute(mesh.uv, 2));
+    geometry.setAttribute('position', new THREE.BufferAttribute(mesh.vertices, 3));
+    geometry.setIndex(new THREE.BufferAttribute(mesh.faces, 1));
+    if (mesh.uv) geometry.setAttribute('uv', new THREE.BufferAttribute(mesh.uv, 2));
     geometry.computeVertexNormals();
     return geometry;
   }
@@ -108,101 +110,171 @@ async function createGraspViewer(id) {
     annotationFaces = new Set();
   }
 
+  async function progress(message) {
+    element.$emit('load_progress', message);
+    // Give the browser a chance to paint the progress indicator between stages.
+    await new Promise(resolve => setTimeout(resolve, 0));
+  }
+
+  function loadTexture(url, signal) {
+    return new Promise((resolve, reject) => {
+      const cancel = () => { texture.dispose(); reject(signal.reason); };
+      const texture = loader.load(url, () => {
+        signal.removeEventListener('abort', cancel);
+        resolve(texture);
+      }, undefined, () => {
+        signal.removeEventListener('abort', cancel);
+        texture.dispose();
+        reject(new Error('Could not load the object texture'));
+      });
+      signal.addEventListener('abort', cancel, {once: true});
+      if (signal.aborted) cancel();
+    });
+  }
+
+  async function fetchPayload(url, signal) {
+    const response = await fetch(url, {signal});
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.detail || `Dataset loading failed (${response.status})`);
+    }
+    const buffer = await response.arrayBuffer();
+    signal.throwIfAborted();
+    const headerLength = new DataView(buffer).getUint32(0, true);
+    const header = new TextDecoder().decode(new Uint8Array(buffer, 4, headerLength));
+    const start = 4 + headerLength;
+    return JSON.parse(header, (_key, value) => {
+      if (value && value.buffer_type) {
+        const Type = value.buffer_type === 'uint32' ? Uint32Array : Float32Array;
+        return new Type(buffer, start + value.offset, value.length);
+      }
+      return value;
+    });
+  }
+
+  function buildAnnotation(mesh) {
+    const indexed = geometry(mesh);
+    const annotationGeometry = indexed.toNonIndexed();
+    indexed.dispose();
+
+    const count = annotationGeometry.getAttribute('position').count;
+    annotationGeometry.setAttribute(
+      'color',
+      new THREE.Float32BufferAttribute(
+        new Float32Array(count * 3),
+        3,
+      ),
+    );
+
+    annotationMesh = new THREE.Mesh(
+      annotationGeometry,
+      new THREE.MeshStandardMaterial({
+        vertexColors: true,
+        roughness: 0.7,
+        metalness: 0.0,
+        side: THREE.DoubleSide,
+      }),
+    );
+    annotationMesh.visible = false;
+    content.add(annotationMesh);
+    refreshAnnotation();
+  }
+
   const api = {
     async load(index) {
-      const response = await fetch(`/grasp-data/${index}`);
-      const next = await response.json();
-      if (!response.ok) throw new Error(next.detail || 'Dataset loading failed');
-      dispose();
-      data = next;
-      selected = 0;
-      objectGroup = new THREE.Group();
-      content.add(objectGroup);
-      for (const mesh of data.object_meshes) {
-        const material = new THREE.MeshStandardMaterial({
-          color: new THREE.Color().fromArray(mesh.color), roughness: 0.66, metalness: 0.05,
-          side: THREE.DoubleSide,
-        });
-        if (mesh.texture) {
-          material.map = await loader.loadAsync(mesh.texture);
-          material.map.colorSpace = THREE.SRGBColorSpace;
-          material.color.set('#ffffff');
-        }
-        objectGroup.add(new THREE.Mesh(geometry(mesh), material));
-      }
-
-      if (data.annotation_mesh) {
-        const indexed = geometry(data.annotation_mesh);
-        const annotationGeometry = indexed.toNonIndexed();
-        indexed.dispose();
-
-        const count = annotationGeometry.getAttribute('position').count;
-        annotationGeometry.setAttribute(
-          'color',
-          new THREE.Float32BufferAttribute(
-            new Float32Array(count * 3),
-            3,
-          ),
-        );
-
-        annotationMesh = new THREE.Mesh(
-          annotationGeometry,
-          new THREE.MeshStandardMaterial({
-            vertexColors: true,
-            roughness: 0.7,
-            metalness: 0.0,
+      loadController.abort();
+      const controller = new AbortController();
+      loadController = controller;
+      const timer = setTimeout(() => controller.abort(new Error('Dataset loading timed out. Retry or select another file.')), timeoutMs);
+      try {
+        await progress('Reading assets and downloading scene');
+        const next = await fetchPayload(`/grasp-data/${index}`, controller.signal);
+        await progress('Building object geometry');
+        controller.signal.throwIfAborted();
+        dispose();
+        data = next;
+        datasetIndex = index;
+        selected = 0;
+        objectGroup = new THREE.Group();
+        content.add(objectGroup);
+        for (const mesh of data.object_meshes) {
+          const material = new THREE.MeshStandardMaterial({
+            color: new THREE.Color().fromArray(mesh.color), roughness: 0.66, metalness: 0.05,
             side: THREE.DoubleSide,
-          }),
-        );
-        annotationMesh.visible = false;
-        content.add(annotationMesh);
-        refreshAnnotation();
-      }
-
-      for (const part of data.parts) {
-        for (const mesh of part.meshes) {
-          const g = geometry(mesh);
-          const overview = mesh.overview ? geometry(mesh.overview) : g;
-          const all = new THREE.InstancedMesh(overview, new THREE.MeshStandardMaterial({
-            color: '#ffffff', transparent: true, opacity, depthWrite: false,
-            roughness: 0.6, metalness: 0.15, side: THREE.FrontSide,
-          }), data.candidates.length);
-          all.frustumCulled = false;
-          for (let i = 0; i < data.candidates.length; i++) {
-            all.setMatrixAt(i, new THREE.Matrix4().fromArray(part.matrices[i]));
+          });
+          if (mesh.texture) {
+            const texture = await loadTexture(mesh.texture, controller.signal);
+            if (controller.signal.aborted) {
+              texture.dispose();
+              material.dispose();
+              controller.signal.throwIfAborted();
+            }
+            material.map = texture;
+            material.map.colorSpace = THREE.SRGBColorSpace;
+            material.color.set('#ffffff');
           }
-          all.computeBoundingSphere();
-          const single = new THREE.Mesh(g, new THREE.MeshStandardMaterial({
-            color: highlight, roughness: 0.45, metalness: 0.25, side: THREE.DoubleSide,
-          }));
-          single.matrixAutoUpdate = false;
-          content.add(all, single);
-          groups.push({all, single, matrices: part.matrices});
+          objectGroup.add(new THREE.Mesh(geometry(mesh), material));
         }
+
+        await progress('Building grasp poses');
+        controller.signal.throwIfAborted();
+        for (const part of data.parts) {
+          for (const mesh of part.meshes) {
+            const g = geometry(mesh);
+            const overview = mesh.overview ? geometry(mesh.overview) : g;
+            const all = new THREE.InstancedMesh(overview, new THREE.MeshStandardMaterial({
+              color: '#ffffff', transparent: true, opacity, depthWrite: false,
+              roughness: 0.6, metalness: 0.15, side: THREE.FrontSide,
+            }), data.candidates.length);
+            all.frustumCulled = false;
+            for (let i = 0; i < data.candidates.length; i++) {
+              all.setMatrixAt(i, new THREE.Matrix4().fromArray(part.matrices[i]));
+            }
+            all.computeBoundingSphere();
+            const single = new THREE.Mesh(g, new THREE.MeshStandardMaterial({
+              color: highlight, roughness: 0.45, metalness: 0.25, side: THREE.DoubleSide,
+            }));
+            single.matrixAutoUpdate = false;
+            content.add(all, single);
+            groups.push({all, single, matrices: part.matrices});
+          }
+        }
+        const bounds = new THREE.Box3().setFromObject(content);
+        center = bounds.getCenter(new THREE.Vector3());
+        radius = Math.max(bounds.getSize(new THREE.Vector3()).length() / 2, 0.001);
+        const min = new THREE.Vector3().fromArray(data.bounds[0]);
+        const max = new THREE.Vector3().fromArray(data.bounds[1]);
+        const objectSize = max.clone().sub(min);
+        grid = new THREE.GridHelper(radius * 4, 24, '#b6c4be', '#d4dcd8');
+        grid.rotation.x = Math.PI / 2;
+        grid.position.set(center.x, center.y, min.z - objectSize.length() * 0.03);
+        grid.material.transparent = true;
+        grid.material.opacity = 0.6;
+        axes = new THREE.AxesHelper(objectSize.length() * 0.25);
+        axes.visible = false;
+        content.add(grid, axes);
+        await progress('Fitting camera');
+        controller.signal.throwIfAborted();
+        refresh();
+        api.frame('perspective');
+        return {object: data.object, robot: data.robot, candidates: data.candidates,
+          provenance: data.provenance, source: data.source, size: objectSize.toArray()};
+      } finally {
+        clearTimeout(timer);
       }
-      const bounds = new THREE.Box3().setFromObject(content);
-      center = bounds.getCenter(new THREE.Vector3());
-      radius = Math.max(bounds.getSize(new THREE.Vector3()).length() / 2, 0.001);
-      const min = new THREE.Vector3().fromArray(data.bounds[0]);
-      const max = new THREE.Vector3().fromArray(data.bounds[1]);
-      const objectSize = max.clone().sub(min);
-      grid = new THREE.GridHelper(radius * 4, 24, '#b6c4be', '#d4dcd8');
-      grid.rotation.x = Math.PI / 2;
-      grid.position.set(center.x, center.y, min.z - objectSize.length() * 0.03);
-      grid.material.transparent = true;
-      grid.material.opacity = 0.6;
-      axes = new THREE.AxesHelper(objectSize.length() * 0.25);
-      axes.visible = false;
-      content.add(grid, axes);
-      refresh();
-      api.frame('perspective');
-      return {object: data.object, robot: data.robot, candidates: data.candidates,
-        provenance: data.provenance, source: data.source, size: objectSize.toArray()};
     },
+    cancelLoad() { loadController.abort(); },
     select(index) { selected = index; refresh(); },
     mode(value) { displayMode = value; refresh(); },
 
-    workspace(value) {
+    async workspace(value) {
+      if (value === 'annotate' && !annotationMesh) {
+        if (!data.has_annotation) throw new Error('This dataset has no prepared annotation surface');
+        await progress('Loading annotation surface');
+        const payload = await fetchPayload(`/grasp-data/${datasetIndex}/annotation`, AbortSignal.timeout(timeoutMs));
+        await progress('Building annotation surface');
+        buildAnnotation(payload.annotation_mesh);
+      }
       workspaceMode = value;
       objectGroup.visible = value === 'preview';
       if (annotationMesh) annotationMesh.visible = value === 'annotate';
@@ -220,7 +292,7 @@ async function createGraspViewer(id) {
     appearance(value, showObject, showAxes, showGrid, wireframe, color) {
       opacity = value;
       colorMode = color;
-      objectGroup.visible = showObject;
+      objectGroup.visible = workspaceMode === 'preview' && showObject;
       axes.visible = showAxes;
       grid.visible = showGrid;
       for (const group of groups) {
@@ -277,7 +349,8 @@ async function createGraspViewer(id) {
       return {count: data?.candidates.length || 0, selected, mode: displayMode,
         instances: groups.reduce((n, g) => n + (g.all.visible ? g.all.count : 0), 0),
         camera: element.camera.position.toArray(), meshes: objectGroup.children.length,
-        textures: objectGroup.children.filter(m => m.material.map).length};
+        textures: objectGroup.children.filter(m => m.material.map).length,
+        annotationLoaded: annotationMesh !== null};
     },
   };
   let down = {x: 0, y: 0};

@@ -88,6 +88,14 @@ not an MDL renderer. This is a pose inspector, not a physical success evaluator.
   distribution and adapts to the viewport aspect ratio.
 - **Image:** the camera button downloads a PNG of the current 3D view.
 
+Scene loading displays its current stage. Geometry uses compressed binary buffers
+with the same float32 precision used for browser rendering; grasp poses and joint
+states are unchanged. Asset reading, serialization, and compression run outside
+the server event loop. The exact annotation surface is downloaded and built only
+when entering **Annotate**; saved NPZ files retain the original server geometry
+and face indices. Load and initialization errors dismiss the loading overlay and
+offer **Retry**. A stalled scene request is aborted after 60 seconds.
+
 Each browser tab owns its selection and display state. Up to four loaded datasets
 are cached by the server; restart after modifying files on disk. Instance rendering
 reduces geometry duplication, but very large datasets still require memory for
