@@ -9,10 +9,14 @@ import os
 import signal
 import subprocess
 import sys
+import tempfile
 import time
+from contextlib import suppress
 from pathlib import Path
 from traceback import print_exc
 from typing import Any
+
+import yaml
 
 from graspdatagen.assets import check_cache, file_hash, inspect_object, write_json
 from graspdatagen.config import digest, load_gripper, load_objects, load_run
@@ -125,6 +129,104 @@ def data_worker(args: argparse.Namespace) -> None:
     runtime.close()
 
 
+def parse_devices(value: str) -> tuple[int, ...]:
+    try:
+        devices = tuple(int(item) for item in value.split(","))
+    except ValueError:
+        raise ValueError("Devices must be comma-separated nonnegative integers") from None
+    if not devices or len(set(devices)) != len(devices) or min(devices) < 0:
+        raise ValueError("Devices must be unique nonnegative integers")
+    return devices
+
+
+def run_parallel_generate(config_path: Path, devices: tuple[int, ...], resume: bool) -> None:
+    config = load_run(config_path)
+    if len(devices) > len(config.grippers):
+        raise ValueError("Parallel generation needs at least one gripper per GPU")
+
+    config.output.parent.mkdir(parents=True, exist_ok=True)
+    # Each invocation owns its inputs and logs, including rejected resumes and
+    # concurrent launches. The generate supervisor still owns the output lock.
+    launch = Path(
+        tempfile.mkdtemp(prefix=config.output.name + ".parallel-", dir=config.output.parent)
+    )
+    processes: list[tuple[int, subprocess.Popen[bytes]]] = []
+    command = [sys.executable, "-u", "-m", "graspdatagen.cli", "generate"]
+    if resume:
+        command.append("--resume")
+
+    interrupted = 0
+
+    def stop_workers(signum: int, frame: object) -> None:
+        # Defer cleanup until Popen's result has been registered, even if a
+        # signal arrives while it is creating the process.
+        nonlocal interrupted
+        interrupted = signum
+
+    previous_handlers = {
+        signum: signal.signal(signum, stop_workers) for signum in (signal.SIGTERM, signal.SIGINT)
+    }
+    try:
+        for position, device in enumerate(devices):
+            if interrupted:
+                raise SystemExit(128 + interrupted)
+            shard_grippers = config.grippers[position :: len(devices)]
+            shard_output = config.output.with_name(f"{config.output.name}-gpu{device}")
+            shard_path = launch / f"gpu{device}.yaml"
+            snapshot = dict(config.snapshot)
+            snapshot["device"] = device
+            snapshot["output"] = str(shard_output)
+            snapshot["grippers"] = [str(path) for path in shard_grippers]
+            shard_path.write_text(yaml.safe_dump(snapshot, sort_keys=False))
+
+            log = launch / f"gpu{device}.log"
+            with log.open("x") as stream:
+                process = subprocess.Popen(
+                    [*command, "--config", str(shard_path)],
+                    stdout=stream,
+                    stderr=subprocess.STDOUT,
+                    start_new_session=True,
+                )
+                processes.append((device, process))
+            print(f"P3: gpu={device}; output={shard_output}; log={log}", flush=True)
+
+        failures: list[int] = []
+        for device, process in processes:
+            while True:
+                if interrupted:
+                    raise SystemExit(128 + interrupted)
+                try:
+                    returncode = process.wait(timeout=1)
+                    break
+                except subprocess.TimeoutExpired:
+                    pass
+            print(f"P3: gpu={device}; exit={returncode}", flush=True)
+            if returncode:
+                failures.append(device)
+        if interrupted:
+            raise SystemExit(128 + interrupted)
+        if failures:
+            raise SystemExit(
+                f"Parallel generation failed on GPU(s): {', '.join(map(str, failures))}"
+            )
+    except BaseException:
+        # Each session contains a generate supervisor and its Isaac Sim worker.
+        # Stop both, including workers whose supervisor has already exited.
+        for _, process in processes:
+            with suppress(ProcessLookupError):
+                os.killpg(process.pid, signal.SIGTERM)
+        for _, process in processes:
+            with suppress(subprocess.TimeoutExpired):
+                process.wait(timeout=10)
+            with suppress(ProcessLookupError):
+                os.killpg(process.pid, signal.SIGKILL)
+            process.wait()
+        raise
+    finally:
+        for signum, handler in previous_handlers.items():
+            signal.signal(signum, handler)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -160,6 +262,16 @@ def main() -> None:
         "--resume", action="store_true", help="Continue an identical interrupted run"
     )
     generate.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
+    parallel = commands.add_parser(
+        "generate-parallel", help="Run independent generate workers on multiple GPUs"
+    )
+    parallel.add_argument("--config", type=Path, required=True)
+    parallel.add_argument("--devices", required=True, help="Comma-separated GPU ordinals")
+    parallel.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume existing shard outputs after an interrupted parallel run",
+    )
     replay = commands.add_parser("replay", help="Execute saved pregrasp and every trial")
     replay.add_argument("--run", type=Path, required=True)
     replay.add_argument("--output", type=Path, required=True)
@@ -199,6 +311,9 @@ def main() -> None:
         return
     if args.command == "export":
         print(export_grasps_yaml(args.run))
+        return
+    if args.command == "generate-parallel":
+        run_parallel_generate(args.config, parse_devices(args.devices), args.resume)
         return
     if (
         args.command in ("generate", "replay", "audit")

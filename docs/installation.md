@@ -83,6 +83,8 @@ uv run --locked graspdatagen prepare --manifest configs/objects/our_assets.yaml 
 
 uv run --locked graspdatagen generate --config configs/runs/production.yaml
 uv run --locked graspdatagen generate --config configs/runs/production.yaml --resume
+uv run --locked graspdatagen generate-parallel \
+  --config configs/runs/production.yaml --devices 0,1
 
 uv run --locked graspdatagen replay --run outputs/our-assets/piper--bubble_tea_cup_300g \
   --environments 1 --output outputs/replay/piper--bubble_tea_cup_300g.json
@@ -116,6 +118,24 @@ the remaining objects.
 defaults to one environment and all saved grasps; `--grasp-id` selects one positive
 candidate ID. Audit defaults to all cases; `--case` selects an individual physical
 counterexample or sensitivity run. `--help` lists the supported arguments.
+
+`generate-parallel` splits the YAML's grippers across the requested GPUs, creates
+one independent Isaac Sim process per GPU, and writes each shard under
+`<output>-gpu<N>`. This keeps `multi_gpu` disabled and gives each shard its own
+output lock. Each invocation saves its shard YAML files and logs in a new
+`<output>.parallel-<unique>/` directory, printed at launch. Rejected or concurrent
+launches therefore preserve previous configurations and logs. Startup errors and
+interrupts stop and reap the launched supervisors and terminate their worker
+process groups; processes still present after the shutdown grace period are killed.
+
+Object preparation locks each cache entry so workers sharing a cold cache reuse
+the first completed build. For replay or audit after parallel generation, use
+the corresponding shard path, for example
+`outputs/our-assets-gpu0/piper--bubble_tea_cup_300g` for the command above.
+Use `--resume` with the same configuration and device order after an interrupted
+parallel run. Each shard must already have an initialized run; a launch interrupted
+before initialization may require starting its missing shards with `generate`
+using their saved YAML files. The command requires at least one gripper per GPU.
 
 ### Live GUI
 
