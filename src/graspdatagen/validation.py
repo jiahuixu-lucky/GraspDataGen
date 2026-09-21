@@ -127,74 +127,92 @@ def validate(
             scene.runtime.step()
             step_number += 1
             state = scene.read()
-            tcp = state["base"] @ T_B_tcp
-            relative = np.linalg.inv(tcp) @ state["object"]
-            contacts = state["contact"][:, :2].min(axis=1)
+            alive = failure[:, trial] == 0
+            active_envs = np.flatnonzero(alive)
+            tcp = state["base"][active_envs] @ T_B_tcp
+            relative = np.linalg.inv(tcp) @ state["object"][active_envs]
+            contacts = state["contact"][active_envs, :2].min(axis=1)
             bilateral = contacts >= p.minimum_contact_force_N
-            missing[:] = np.where(bilateral, 0, missing + 1)
-            solver_linear = np.linalg.norm(state["velocity"][:, :3], axis=1)
-            solver_angular = np.linalg.norm(state["velocity"][:, 3:], axis=1)
+            missing[active_envs] = np.where(bilateral, 0, missing[active_envs] + 1)
+            solver_linear = np.linalg.norm(state["velocity"][active_envs, :3], axis=1)
+            solver_angular = np.linalg.norm(state["velocity"][active_envs, 3:], axis=1)
             # Constraint-projected poses and solver velocity readback disagree
             # in real contact runs. Check resolved motion on every physics tick,
             # measuring translation at the COM and retaining raw velocities.
-            com = state["object"][:, :3, :3] @ com_local + state["object"][:, :3, 3]
-            linear = np.linalg.norm(com - previous_com, axis=1) * p.steps_per_second
-            rotation = state["object"][:, :3, :3] @ previous_object[:, :3, :3].swapaxes(1, 2)
-            angular = Rotation.from_matrix(rotation).magnitude() * p.steps_per_second
-            previous_com[:] = com
-            previous_object[:] = state["object"]
-            joint_speed = np.abs(state["joints"] - previous_joints).max(axis=1) * p.steps_per_second
-            previous_joints[:] = state["joints"]
-            solver_joint_speed = np.abs(state["joint_velocity"]).max(axis=1)
+            object_pose = state["object"][active_envs]
+            joints = state["joints"][active_envs]
+            com = object_pose[:, :3, :3] @ com_local + object_pose[:, :3, 3]
+            linear = np.linalg.norm(com - previous_com[active_envs], axis=1) * p.steps_per_second
+            rotation = object_pose[:, :3, :3] @ previous_object[active_envs, :3, :3].swapaxes(1, 2)
+            angular = (
+                np.arccos(
+                    np.clip((np.einsum("nii->n", rotation[:, :3, :3]) - 1.0) * 0.5, -1.0, 1.0)
+                )
+                * p.steps_per_second
+            )
+            previous_com[active_envs] = com
+            previous_object[active_envs] = object_pose
+            joint_speed = (
+                np.abs(joints - previous_joints[active_envs]).max(axis=1) * p.steps_per_second
+            )
+            previous_joints[active_envs] = joints
+            solver_joint_speed = np.abs(state["joint_velocity"][active_envs]).max(axis=1)
             slow = (
                 (linear < p.max_linear_speed_m_s)
                 & (angular < p.max_angular_speed_rad_s)
                 & (joint_speed < p.max_joint_speed_m_s)
             )
-            stable[:] = np.where(bilateral & slow, stable + 1, 0)
+            stable[active_envs] = np.where(bilateral & slow, stable[active_envs] + 1, 0)
             drift, angle = (
-                pose_error(baseline, relative) if baseline_ready else (np.zeros(n), np.zeros(n))
+                pose_error(baseline[active_envs], relative)
+                if baseline_ready
+                else (np.zeros(len(active_envs)), np.zeros(len(active_envs)))
             )
-            alive = failure[:, trial] == 0
             row = metrics[:, trial, stage]
             first = row[:, -1] == 0
-            row[alive, 0] = np.where(
-                first[alive], contacts[alive], np.minimum(row[alive, 0], contacts[alive])
+            row[active_envs, 0] = np.where(
+                first[active_envs], contacts, np.minimum(row[active_envs, 0], contacts)
             )
             values = np.column_stack(
-                (drift, angle, missing / p.steps_per_second, linear, angular, joint_speed)
+                (
+                    drift,
+                    angle,
+                    missing[active_envs] / p.steps_per_second,
+                    linear,
+                    angular,
+                    joint_speed,
+                )
             )
-            row[alive, 1:7] = np.maximum(row[alive, 1:7], values[alive])
-            row[alive, 7:11] = np.column_stack(
-                (linear, angular, joint_speed, stable / p.steps_per_second)
-            )[alive]
-            row[alive, 11] = np.maximum(row[alive, 11], solver_joint_speed[alive])
-            row[alive, 12] = solver_joint_speed[alive]
-            row[alive, -1] += 1
-            status[alive, trial, stage] = 1
+            row[active_envs, 1:7] = np.maximum(row[active_envs, 1:7], values)
+            row[active_envs, 7:11] = np.column_stack(
+                (linear, angular, joint_speed, stable[active_envs] / p.steps_per_second)
+            )
+            row[active_envs, 11] = np.maximum(row[active_envs, 11], solver_joint_speed)
+            row[active_envs, 12] = solver_joint_speed
+            row[active_envs, -1] += 1
+            status[active_envs, trial, stage] = 1
             mimic_error = np.abs(
-                state["joints"][:, follower]
-                + mimic["gearing"] * state["joints"][:, active]
-                + mimic["offset"]
+                joints[:, follower] + mimic["gearing"] * joints[:, active] + mimic["offset"]
             )
             limit_error = np.maximum(
-                0, np.maximum(limits[:, 0] - state["joints"], state["joints"] - limits[:, 1])
+                0, np.maximum(limits[:, 0] - joints, joints - limits[:, 1])
             ).max(axis=1)
-            palm_force = state["contact"][:, 2:].max(axis=1)
-            row[alive, 13:16] = np.maximum(
-                row[alive, 13:16], np.column_stack((mimic_error, limit_error, palm_force))[alive]
+            palm_force = state["contact"][active_envs, 2:].max(axis=1)
+            row[active_envs, 13:16] = np.maximum(
+                row[active_envs, 13:16],
+                np.column_stack((mimic_error, limit_error, palm_force)),
             )
             solver_speeds = np.column_stack((solver_linear, solver_angular))
-            row[alive, 16:18] = np.maximum(row[alive, 16:18], solver_speeds[alive])
-            row[alive, 18:20] = solver_speeds[alive]
+            row[active_envs, 16:18] = np.maximum(row[active_envs, 16:18], solver_speeds)
+            row[active_envs, 18:20] = solver_speeds
             invalid_joints = np.maximum(mimic_error, limit_error) > p.joint_tolerance_m
-            codes = np.zeros(n, dtype=np.int64)
+            codes = np.zeros(len(active_envs), dtype=np.int64)
             codes[invalid_joints] = FAILURES.index("joint_constraint_violation")
             palm = palm_force >= p.minimum_contact_force_N
             if stage <= 1:
-                moved, rotated = pose_error(initial_object, state["object"])
+                moved, rotated = pose_error(initial_object[active_envs], object_pose)
                 collision = (
-                    (state["contact"] >= p.minimum_contact_force_N).any(axis=1)
+                    (state["contact"][active_envs] >= p.minimum_contact_force_N).any(axis=1)
                     | (moved > p.approach_translation_m)
                     | (rotated > p.approach_rotation_rad)
                 )
@@ -205,18 +223,18 @@ def validate(
                 slipped = (
                     (drift > p.max_translation_m)
                     | (angle > p.max_rotation_rad)
-                    | (missing > loss_steps)
+                    | (missing[active_envs] > loss_steps)
                     | palm
                 )
                 codes[slipped] = 5 if stage == 3 else (6 if stage == 4 else 7)
             if settling:
-                codes[stable < stable_steps] = (
+                codes[stable[active_envs] < stable_steps] = (
                     3 if stage == 2 else (5 if stage == 3 else (6 if stage == 4 else 7))
                 )
-                codes[(stage == 2) & bilateral & (stable < stable_steps)] = 4
-            failed = alive & (codes != 0)
-            failure[failed, trial] = codes[failed]
-            status[failed, trial, stage] = -1
+                codes[(stage == 2) & bilateral & (stable[active_envs] < stable_steps)] = 4
+            failed = codes != 0
+            failure[active_envs[failed], trial] = codes[failed]
+            status[active_envs[failed], trial, stage] = -1
             if trial == 0 and (
                 step_number == 1
                 or step_number % max(1, p.steps_per_second // 20) == 0
@@ -224,7 +242,7 @@ def validate(
                 or failed.any()
             ):
                 trace_lists["object"].append(state["object"].copy())
-                trace_lists["tcp"].append(tcp.copy())
+                trace_lists["tcp"].append((state["base"] @ T_B_tcp).copy())
                 trace_lists["joints"].append(state["joints"].copy())
                 trace_lists["contact"].append(state["contact"].copy())
                 trace_lists["velocity"].append(state["velocity"].copy())
@@ -311,8 +329,7 @@ def validate(
             if (failure[:, trial] != 0).all():
                 scene.force(zero_force)
                 print(
-                    f"P2 EARLY_EXIT trial={trial} stage=invert "
-                    f"step={step + 1}/{invert_steps}",
+                    f"P2 EARLY_EXIT trial={trial} stage=invert step={step + 1}/{invert_steps}",
                     flush=True,
                 )
                 print_stage_profile()
