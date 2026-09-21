@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import tempfile
@@ -419,149 +420,156 @@ def prepare_object(runtime: PhysxRuntime, config: ObjectConfig, cache_root: Path
     fingerprint["files"][str(config.metadata)] = file_hash(config.metadata)
     key = cache_identity(fingerprint, config.snapshot)
     destination = cache_root / "objects" / key
-    if destination.exists():
-        check_cache(destination)
-        return destination
-    inspection = inspect_object(config)
-    print(f"P1: loading source collisions for {config.name}", flush=True)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix=".preparing-", dir=destination.parent) as temporary:
-        directory = Path(temporary)
-        stage = open_stage(config.source, config.root_prim)
-        root = stage.GetDefaultPrim()
-        unit = inspection["meters_per_unit"]
-        # Object axes remain those of the source root, regardless of stage up-axis.
-        surface = trimesh.util.concatenate(
-            [mesh_in_frame(stage.GetPrimAtPath(p), root) for p in inspection["surface_prims"]]
-        )
-        surface.apply_scale(unit)
-        surface.merge_vertices()
-        surface.fix_normals(multibody=True)
-        # PhysX resolves the asset's own collision settings. Preserve that geometry
-        # for sampling and simulation instead of decomposing the visual surface.
-        source_path = directory / "source.usdc"
-        stage.GetRootLayer().Export(str(source_path))
-        runtime.new_scene()
-        runtime.reference(source_path, "/World/source")
-        hulls = []
-        for item in inspection["colliders"]:
-            path = item["collider"]
-            transform = relative_transform(stage.GetPrimAtPath(path), root)
-            cooked = runtime.cook_convexes("/World/source" + path[len(inspection["root_prim"]) :])
-            for hull in cooked:
-                hull.apply_transform(transform)
-                hull.apply_scale(unit)
-            hulls.extend(cooked)
-        runtime.new_scene()
-        source_path.unlink()
-        hulls.sort(key=lambda mesh: tuple(mesh.bounds.ravel()) + (len(mesh.vertices),))
-        prepared = Usd.Stage.CreateNew(str(directory / "object.usdc"))
-        body = UsdGeom.Xform.Define(prepared, "/root").GetPrim()
-        prepared.SetDefaultPrim(body)
-        UsdGeom.SetStageMetersPerUnit(prepared, 1.0)
-        UsdGeom.SetStageUpAxis(prepared, UsdGeom.Tokens.z)
-        UsdPhysics.RigidBodyAPI.Apply(body)
-        mass = UsdPhysics.MassAPI.Apply(body)
-        mass.CreateMassAttr(config.mass_kg)
-        source_body = stage.GetPrimAtPath(inspection["body_prim"])
-        source_mass = UsdPhysics.MassAPI(source_body)
-
-        com_attr = source_mass.GetCenterOfMassAttr()
-        if com_attr.HasAuthoredValueOpinion():
-            com = np.asarray(com_attr.Get(), dtype=np.float64)
-            if com.shape != (3,) or not np.isfinite(com).all():
-                raise ValueError("Invalid authored centre of mass")
-
-            from graspdatagen.geometry import transform_points
-
-            resolved_com = (
-                transform_points(com[None, :], relative_transform(source_body, root))[0] * unit
+    # Keep the lock inode: parallel workers must serialize both lookup and build.
+    with destination.with_suffix(".lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if destination.exists():
+            check_cache(destination)
+            return destination
+        inspection = inspect_object(config)
+        print(f"P1: loading source collisions for {config.name}", flush=True)
+        with tempfile.TemporaryDirectory(prefix=".preparing-", dir=destination.parent) as temporary:
+            directory = Path(temporary)
+            stage = open_stage(config.source, config.root_prim)
+            root = stage.GetDefaultPrim()
+            unit = inspection["meters_per_unit"]
+            # Object axes remain those of the source root, regardless of stage up-axis.
+            surface = trimesh.util.concatenate(
+                [mesh_in_frame(stage.GetPrimAtPath(p), root) for p in inspection["surface_prims"]]
             )
-            mass.CreateCenterOfMassAttr(Gf.Vec3f(*resolved_com))
+            surface.apply_scale(unit)
+            surface.merge_vertices()
+            surface.fix_normals(multibody=True)
+            # PhysX resolves the asset's own collision settings. Preserve that geometry
+            # for sampling and simulation instead of decomposing the visual surface.
+            source_path = directory / "source.usdc"
+            stage.GetRootLayer().Export(str(source_path))
+            runtime.new_scene()
+            runtime.reference(source_path, "/World/source")
+            hulls = []
+            for item in inspection["colliders"]:
+                path = item["collider"]
+                transform = relative_transform(stage.GetPrimAtPath(path), root)
+                cooked = runtime.cook_convexes(
+                    "/World/source" + path[len(inspection["root_prim"]) :]
+                )
+                for hull in cooked:
+                    hull.apply_transform(transform)
+                    hull.apply_scale(unit)
+                hulls.extend(cooked)
+            runtime.new_scene()
+            source_path.unlink()
+            hulls.sort(key=lambda mesh: tuple(mesh.bounds.ravel()) + (len(mesh.vertices),))
+            prepared = Usd.Stage.CreateNew(str(directory / "object.usdc"))
+            body = UsdGeom.Xform.Define(prepared, "/root").GetPrim()
+            prepared.SetDefaultPrim(body)
+            UsdGeom.SetStageMetersPerUnit(prepared, 1.0)
+            UsdGeom.SetStageUpAxis(prepared, UsdGeom.Tokens.z)
+            UsdPhysics.RigidBodyAPI.Apply(body)
+            mass = UsdPhysics.MassAPI.Apply(body)
+            mass.CreateMassAttr(config.mass_kg)
+            source_body = stage.GetPrimAtPath(inspection["body_prim"])
+            source_mass = UsdPhysics.MassAPI(source_body)
 
-        inertia_attr = source_mass.GetDiagonalInertiaAttr()
-        if inertia_attr.HasAuthoredValueOpinion():
-            inertia = np.asarray(inertia_attr.Get(), dtype=np.float64)
-            if inertia.shape != (3,) or not np.isfinite(inertia).all() or (inertia <= 0).any():
-                raise ValueError("Invalid authored inertia")
-            # P1 does not silently reinterpret inertia under a changed mass or body frame.
-            if config.mass_kg != inspection["usd_mass_kg"] or source_body != root or unit != 1:
-                raise ValueError("Authored inertia requires a matching mass and metre root frame")
-            mass.CreateDiagonalInertiaAttr(Gf.Vec3f(*inertia))
-            mass.CreatePrincipalAxesAttr(source_mass.GetPrincipalAxesAttr().Get())
-        collider_prims = []
-        UsdGeom.Xform.Define(prepared, "/root/collisions")
-        for index, item in enumerate(inspection["colliders"]):
-            path = f"/root/collisions/mesh_{index:03d}"
-            Sdf.CopySpec(stage.GetRootLayer(), item["collider"], prepared.GetRootLayer(), path)
-            prim = prepared.GetPrimAtPath(path)
-            transform = relative_transform(stage.GetPrimAtPath(item["collider"]), root)
-            transform[:3, :] *= unit
-            set_transform(prim, transform)
-            # CopySpec may preserve material bindings on descendant GeomSubsets.
-            # Those bindings can target source-only materials that are not copied
-            # into object.usdc. Remove all source material bindings recursively;
-            # the prepared collider receives GraspDataGen's resolved material below.
-            for descendant in Usd.PrimRange(prim):
-                UsdShade.MaterialBindingAPI(descendant).UnbindAllBindings()
-            collider_prims.append(prim)
-        bind_material(prepared, collider_prims, config.material)
-        prepared.GetRootLayer().Save()
-        # Full-resolution, textured replay lives separately from the production collision display.
-        for item in inspection["colliders"]:
-            UsdPhysics.CollisionAPI(
-                stage.GetPrimAtPath(item["collider"])
-            ).CreateCollisionEnabledAttr(False)
-        for prim in stage.Traverse():
-            if prim.HasAPI(UsdPhysics.RigidBodyAPI):
-                UsdPhysics.RigidBodyAPI(prim).CreateRigidBodyEnabledAttr(False)
-        set_transform(root, np.eye(4))
-        retain_object_dependencies(stage)
-        localize_assets(stage, directory)
-        stage.GetRootLayer().Export(str(directory / "replay.usdc"))
-        arrays = {
-            "surface_vertices_m": np.asarray(surface.vertices),
-            "surface_faces": np.asarray(surface.faces, dtype=np.int64),
-            "T_object_C": np.eye(4),
-        }
-        for i, hull in enumerate(hulls):
-            arrays[f"hull_{i:03d}_vertices_m"] = np.asarray(hull.vertices)
-            arrays[f"hull_{i:03d}_faces"] = np.asarray(hull.faces, dtype=np.int64)
-        np.savez_compressed(directory / "geometry.npz", allow_pickle=False, **arrays)
-        references = {
-            name: check_references(directory / name) for name in ("object.usdc", "replay.usdc")
-        }
-        physical = runtime.measure_object(directory / "object.usdc")
-        if not np.isclose(physical["mass_kg"], config.mass_kg):
-            raise RuntimeError("Cooked object mass differs from manifest")
-        expected = [
-            config.material.static_friction,
-            config.material.dynamic_friction,
-            config.material.restitution,
-        ]
-        if not np.allclose(physical["materials"], expected, atol=1e-6):
-            raise RuntimeError("Cooked object material differs from manifest")
-        write_json(directory / "inspection.json", inspection)
-        from graspdatagen.inspection import inspect_object_3d
+            com_attr = source_mass.GetCenterOfMassAttr()
+            if com_attr.HasAuthoredValueOpinion():
+                com = np.asarray(com_attr.Get(), dtype=np.float64)
+                if com.shape != (3,) or not np.isfinite(com).all():
+                    raise ValueError("Invalid authored centre of mass")
 
-        inspect_object_3d(directory, config.name)
-        seal_cache(
-            directory,
-            {
-                "kind": "object",
-                "name": config.name,
-                "key": key,
-                "source": fingerprint,
-                "config": config.snapshot,
-                "inspection": inspection,
-                "collision_source": "source_asset",
-                "cooked_hulls": len(hulls),
-                "collision_vertices": sum(len(h.vertices) for h in hulls),
-                "collision_triangles": sum(len(h.faces) for h in hulls),
-                "references": references,
-                "physical": physical,
-                "T_object_C": np.eye(4).tolist(),
-            },
-        )
-        directory.rename(destination)
-    return destination
+                from graspdatagen.geometry import transform_points
+
+                resolved_com = (
+                    transform_points(com[None, :], relative_transform(source_body, root))[0] * unit
+                )
+                mass.CreateCenterOfMassAttr(Gf.Vec3f(*resolved_com))
+
+            inertia_attr = source_mass.GetDiagonalInertiaAttr()
+            if inertia_attr.HasAuthoredValueOpinion():
+                inertia = np.asarray(inertia_attr.Get(), dtype=np.float64)
+                if inertia.shape != (3,) or not np.isfinite(inertia).all() or (inertia <= 0).any():
+                    raise ValueError("Invalid authored inertia")
+                # P1 does not silently reinterpret inertia under a changed mass or body frame.
+                if config.mass_kg != inspection["usd_mass_kg"] or source_body != root or unit != 1:
+                    raise ValueError(
+                        "Authored inertia requires a matching mass and metre root frame"
+                    )
+                mass.CreateDiagonalInertiaAttr(Gf.Vec3f(*inertia))
+                mass.CreatePrincipalAxesAttr(source_mass.GetPrincipalAxesAttr().Get())
+            collider_prims = []
+            UsdGeom.Xform.Define(prepared, "/root/collisions")
+            for index, item in enumerate(inspection["colliders"]):
+                path = f"/root/collisions/mesh_{index:03d}"
+                Sdf.CopySpec(stage.GetRootLayer(), item["collider"], prepared.GetRootLayer(), path)
+                prim = prepared.GetPrimAtPath(path)
+                transform = relative_transform(stage.GetPrimAtPath(item["collider"]), root)
+                transform[:3, :] *= unit
+                set_transform(prim, transform)
+                # CopySpec may preserve material bindings on descendant GeomSubsets.
+                # Those bindings can target source-only materials that are not copied
+                # into object.usdc. Remove all source material bindings recursively;
+                # the prepared collider receives GraspDataGen's resolved material below.
+                for descendant in Usd.PrimRange(prim):
+                    UsdShade.MaterialBindingAPI(descendant).UnbindAllBindings()
+                collider_prims.append(prim)
+            bind_material(prepared, collider_prims, config.material)
+            prepared.GetRootLayer().Save()
+            # Keep full-resolution, textured replay separate from the collision display.
+            for item in inspection["colliders"]:
+                UsdPhysics.CollisionAPI(
+                    stage.GetPrimAtPath(item["collider"])
+                ).CreateCollisionEnabledAttr(False)
+            for prim in stage.Traverse():
+                if prim.HasAPI(UsdPhysics.RigidBodyAPI):
+                    UsdPhysics.RigidBodyAPI(prim).CreateRigidBodyEnabledAttr(False)
+            set_transform(root, np.eye(4))
+            retain_object_dependencies(stage)
+            localize_assets(stage, directory)
+            stage.GetRootLayer().Export(str(directory / "replay.usdc"))
+            arrays = {
+                "surface_vertices_m": np.asarray(surface.vertices),
+                "surface_faces": np.asarray(surface.faces, dtype=np.int64),
+                "T_object_C": np.eye(4),
+            }
+            for i, hull in enumerate(hulls):
+                arrays[f"hull_{i:03d}_vertices_m"] = np.asarray(hull.vertices)
+                arrays[f"hull_{i:03d}_faces"] = np.asarray(hull.faces, dtype=np.int64)
+            np.savez_compressed(directory / "geometry.npz", allow_pickle=False, **arrays)
+            references = {
+                name: check_references(directory / name) for name in ("object.usdc", "replay.usdc")
+            }
+            physical = runtime.measure_object(directory / "object.usdc")
+            if not np.isclose(physical["mass_kg"], config.mass_kg):
+                raise RuntimeError("Cooked object mass differs from manifest")
+            expected = [
+                config.material.static_friction,
+                config.material.dynamic_friction,
+                config.material.restitution,
+            ]
+            if not np.allclose(physical["materials"], expected, atol=1e-6):
+                raise RuntimeError("Cooked object material differs from manifest")
+            write_json(directory / "inspection.json", inspection)
+            from graspdatagen.inspection import inspect_object_3d
+
+            inspect_object_3d(directory, config.name)
+            seal_cache(
+                directory,
+                {
+                    "kind": "object",
+                    "name": config.name,
+                    "key": key,
+                    "source": fingerprint,
+                    "config": config.snapshot,
+                    "inspection": inspection,
+                    "collision_source": "source_asset",
+                    "cooked_hulls": len(hulls),
+                    "collision_vertices": sum(len(h.vertices) for h in hulls),
+                    "collision_triangles": sum(len(h.faces) for h in hulls),
+                    "references": references,
+                    "physical": physical,
+                    "T_object_C": np.eye(4).tolist(),
+                },
+            )
+            directory.rename(destination)
+        return destination
