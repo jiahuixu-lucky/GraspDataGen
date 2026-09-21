@@ -88,7 +88,7 @@ rotated into the original object-root frame by the actual closure orientation.
 It is not the historical approach displacement when closure moved the object.
 Positions are in metres and quaternion order is xyzw. NPZ remains authoritative
 for replay and diagnostics. Export existing verified data without GPU using
-`uv run --locked graspdatagen export --run outputs/production/piper--bottle`.
+`uv run --locked graspdatagen export --run outputs/our-assets/piper--bubble_tea_cup_300g`.
 
 Each pair has a manifest, checksummed NPZ shards, configuration and asset hashes,
 candidate IDs, actual and commanded joints, stage metrics and failure counts.

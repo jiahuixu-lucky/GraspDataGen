@@ -1,0 +1,6 @@
+{
+  "physics": {
+    "mass": 0.3,
+    "friction": 1.0
+  }
+}

@@ -6,7 +6,7 @@ GraspDataGen generates validated parallel-jaw grasp datasets from rigid USD/USDZ
 
 - Linux x86_64, Python 3.12, and a supported NVIDIA GPU
 - [uv](https://docs.astral.sh/uv/)
-- Source assets in `Assets/`
+- Robot assets in `Assets/` and production objects in `Data/our_Assets/`
 
 See [docs/installation.md](docs/installation.md) for installation and asset setup.
 
@@ -23,7 +23,7 @@ uv run graspdatagen generate --config configs/runs/production.yaml
 Inspect results with Isaac Sim:
 
 ```bash
-uv run graspdatagen view --grasps outputs/production/piper--bottle/grasps.yaml
+uv run graspdatagen view --grasps outputs/our-assets/piper--bubble_tea_cup_300g/grasps.yaml
 ```
 
 Inspect results in a browser (no Isaac Sim required):

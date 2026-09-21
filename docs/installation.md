@@ -30,23 +30,33 @@ Isaac Sim also depends on CoACD transitively; GraspDataGen does not call it.
 
 ## Assets
 
-Supply the following external files under `Assets/`, or adjust the project YAML
-paths to an equivalent asset tree. A local symlink is supported and is ignored by
-Git. Source files are read-only inputs; derived files go into `outputs/prepared/`.
+Supply robot assets under `Assets/` and the production object collection under
+`Data/our_Assets/`, or adjust the project YAML paths to an equivalent asset tree.
+Both `Assets/` and `Data/` may be local symlinks and are ignored by Git. Source
+files are read-only inputs; derived files go into `outputs/prepared/`.
 
 ```text
 Assets/Robots/piper/Piper.usd
 Assets/Robots/piper/piper_description/urdf/piper.urdf
 Assets/Robots/x5/ARX.usd
 Assets/Robots/x5/X5A.urdf
-Assets/Object/Rigid/bottle/bottle.usd
-Assets/Object/Rigid/bottle/bottle.json
-Assets/Object/Rigid/matryoshka_dolls/00002/object.usdz
-Assets/Object/Rigid/matryoshka_dolls/00002/metadata.json
+Data/our_Assets/bubble_tea_cup/300g/Aligned.usd
+Data/our_Assets/bubble_tea_cup/300g/metadata.json
+Data/our_Assets/book/000/Aligned.usd
 ```
 
-Keep the source assets' referenced layers, meshes, materials and textures. The
-production manifest also requires instances 00000 through 00024 and their metadata.
+These object paths are examples. The default `configs/runs/production.yaml` uses
+`configs/objects/our_assets.yaml`, which lists all 25 required object USD paths.
+Supply the complete collection and keep its referenced layers, meshes, materials
+and textures. The three bubble tea cup variants (300g, 500g and 800g) also require
+their original `metadata.json` files. The other 22 metadata files are included in
+`configs/objects/our_assets_metadata/`; their mass and friction mirror the source
+USD values. The manifest explicitly selects each object's physical parameters.
+
+The older bottle and matryoshka collection remains available through
+`configs/objects/production.yaml`. To use it, change the run YAML's `manifest`
+and choose a new `output` directory.
+
 The portable `configs/robots/` snapshots define authoritative TCPs and inherit
 drive settings from USD. They do not depend on the original configuration checkout.
 
@@ -61,24 +71,24 @@ export OMNI_KIT_ACCEPT_EULA=YES
 export OPENBLAS_NUM_THREADS=1
 export OMP_NUM_THREADS=8
 
-uv run --locked graspdatagen inspect --manifest configs/objects/production.yaml \
+uv run --locked graspdatagen inspect --manifest configs/objects/our_assets.yaml \
   --output outputs/inspect.json
 
-uv run --locked graspdatagen prepare --manifest configs/objects/production.yaml \
+uv run --locked graspdatagen prepare --manifest configs/objects/our_assets.yaml \
   --gripper configs/grippers/piper.yaml \
   --output outputs/prepare-piper.json
-uv run --locked graspdatagen prepare --manifest configs/objects/production.yaml \
+uv run --locked graspdatagen prepare --manifest configs/objects/our_assets.yaml \
   --gripper configs/grippers/arx_x5.yaml \
   --output outputs/prepare-arx_x5.json
 
 uv run --locked graspdatagen generate --config configs/runs/production.yaml
 uv run --locked graspdatagen generate --config configs/runs/production.yaml --resume
 
-uv run --locked graspdatagen replay --run outputs/production/piper--bottle \
-  --environments 1 --output outputs/replay/piper--bottle.json
+uv run --locked graspdatagen replay --run outputs/our-assets/piper--bubble_tea_cup_300g \
+  --environments 1 --output outputs/replay/piper--bubble_tea_cup_300g.json
 
-uv run --locked graspdatagen audit --run outputs/production/piper--bottle \
-  --config configs/runs/audit.yaml --output outputs/audit/piper--bottle.json
+uv run --locked graspdatagen audit --run outputs/our-assets/piper--bubble_tea_cup_300g \
+  --config configs/runs/audit.yaml --output outputs/audit/piper--bubble_tea_cup_300g.json
 ```
 
 `prepare` is an independent inspection/prewarm command; `generate` calls the same
@@ -115,8 +125,8 @@ Run from a graphical desktop terminal (including a remote desktop) with its vali
 an interactive window; do not assume another user's display is accessible.
 
 ```bash
-uv run --locked graspdatagen replay --run outputs/production/piper--bottle \
-  --environments 16 --gui --output outputs/gui-replay/piper--bottle.json
+uv run --locked graspdatagen replay --run outputs/our-assets/piper--bubble_tea_cup_300g \
+  --environments 16 --gui --output outputs/gui-replay/piper--bubble_tea_cup_300g.json
 ```
 
 The overview camera frames all environments in the current batch. The viewport
@@ -155,9 +165,9 @@ asset paths. Old output is not silently upgraded or overwritten.
 From a local or remote graphical desktop with `DISPLAY` set:
 
 ```bash
-uv run --locked graspdatagen export --run outputs/production/piper--bottle
+uv run --locked graspdatagen export --run outputs/our-assets/piper--bubble_tea_cup_300g
 uv run --locked graspdatagen view \
-  --grasps outputs/production/piper--bottle/grasps.yaml --candidate 0
+  --grasps outputs/our-assets/piper--bubble_tea_cup_300g/grasps.yaml --candidate 0
 ```
 
 New generation exports automatically. Re-export older YAML to include

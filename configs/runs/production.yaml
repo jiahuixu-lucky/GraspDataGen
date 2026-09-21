@@ -1,9 +1,9 @@
 grippers: [configs/grippers/piper.yaml, configs/grippers/arx_x5.yaml]
-manifest: configs/objects/production.yaml
+manifest: configs/objects/our_assets.yaml
 cache: outputs/prepared
-output: outputs/production
+output: outputs/our-assets
 device: 0
-environments: 1024
+environments: 512
 seed: 20260908
 target_successes: 1024
 candidate_budget: 10240

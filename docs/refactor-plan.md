@@ -6,7 +6,8 @@
 
 目录清理后，历史 `outputs/` 数据和诊断文件已删除。下文数量和结果属于
 此前运行记录，不代表当前目录仍有这些数据。正式入口统一为
-`configs/runs/production.yaml`，数据写入 `outputs/production/`，准备资产写入
+`configs/runs/production.yaml`。2026-09-21 默认物体清单已切换为
+`configs/objects/our_assets.yaml`，数据写入 `outputs/our-assets/`，准备资产写入
 `outputs/prepared/`；旧的 smoke 配置与根目录缓存不再使用。
 
 ## 状态
@@ -21,7 +22,8 @@
 | P5 替换与清理 | 默认环境、公开入口和旧链路清理已完成；完整数据验收仍未通过 |
 
 P5 按用户要求先于 P3/P4 实施，不能据此把前两阶段标为完成。
-旧环境不再作为运行入口，当前源资产仍从外部 `Assets/` 读取。
+旧环境不再作为运行入口，机器人源资产从外部 `Assets/` 读取，默认物体源资产
+从 `Data/our_Assets/` 读取。下述历史验收结论不代表新物体清单已完成生产验收。
 
 ## 历史数据与已知问题
 

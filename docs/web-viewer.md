@@ -19,8 +19,8 @@ Select specific files, including datasets outside `outputs`, with:
 
 ```bash
 uv run --project environments/web --locked python environments/web/serve.py \
-  --grasps outputs/production/piper--bottle/grasps.yaml \
-           outputs/production/arx_x5--bottle/grasps.yaml
+  --grasps outputs/our-assets/piper--bubble_tea_cup_300g/grasps.yaml \
+           outputs/our-assets/arx_x5--bubble_tea_cup_300g/grasps.yaml
 ```
 
 Use `--port 8081` if the port is occupied. `--host 0.0.0.0` enables access from
