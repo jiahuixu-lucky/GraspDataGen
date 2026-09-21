@@ -44,13 +44,17 @@ bottom plane. It checks actual closure in every trial against these constraints.
 This is free-space local grasp validation, not a table pickup or full-arm plan.
 
 The dynamic object's gravity is off only during reset, approach and closure.
-It is enabled for gravity hold, multi-direction disturbances, continuous
-180-degree inversion about world X and inverted hold. Contact must come from
+It is enabled for gravity hold, continuous 180-degree inversion about world X
+with multi-direction disturbances, and inverted hold. There are no separate
+disturbance or recovery intervals: directions divide the inversion duration.
+The first inversion tick occupies the retained `disturbance` output stage;
+remaining ticks occupy `invert`. Contact must come from
 both fingers against the target object. Force, slip, rotation and velocity limits
 apply through the stages; a failure cannot be erased by subsequent contact.
 Each saved grasp passes all stages in every configured trial. The production
 profile uses one trial; historical datasets may contain three and replay retains
-their recorded protocol.
+their recorded active protocol fields. Replay and audit ignore retired settings
+in saved manifests; new run configurations reject unknown settings.
 
 Every trial starts with a fresh PhysX scene, including when a worker advances to
 the next candidate batch. Resetting only tensor poses and velocities does not

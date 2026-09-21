@@ -48,8 +48,6 @@ validation:
   approach_s: 1.5
   close_s: 3.0
   hold_s: 0.5
-  disturbance_s: 0.15
-  recovery_s: 0.5
   invert_s: 4.0
   inverted_hold_s: 0.5
   stable_window_s: 0.20

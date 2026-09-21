@@ -236,8 +236,6 @@ class ValidationProfile:
     approach_s: float
     close_s: float
     hold_s: float
-    disturbance_s: float
-    recovery_s: float
     invert_s: float
     inverted_hold_s: float
     stable_window_s: float
@@ -295,8 +293,6 @@ class ValidationProfile:
             "approach_s",
             "close_s",
             "hold_s",
-            "disturbance_s",
-            "recovery_s",
             "invert_s",
             "inverted_hold_s",
             "stable_window_s",
@@ -307,6 +303,14 @@ class ValidationProfile:
                 raise ValueError(f"{name} must contain a positive integral number of steps")
         if self.stable_window_s > min(self.close_s, self.hold_s, self.inverted_hold_s):
             raise ValueError("Stable window exceeds a holding stage")
+
+    @classmethod
+    def from_saved_protocol(cls, protocol: dict[str, Any]) -> ValidationProfile:
+        """Replay/audit need current fields from manifests that retain retired settings.
+
+        New run configurations still use the strict constructor to reject unknown keys.
+        """
+        return cls(**{name: protocol[name] for name in cls.__dataclass_fields__})
 
 
 @dataclass(frozen=True)

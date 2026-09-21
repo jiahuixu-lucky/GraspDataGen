@@ -10,7 +10,7 @@ import numpy as np
 from graspdatagen.assets import file_hash, write_json
 from graspdatagen.config import ValidationProfile, fields, positive, read_mapping
 from graspdatagen.geometry import FloatArray
-from graspdatagen.records import FAILURES, PreparedPair
+from graspdatagen.records import FAILURES, METRICS, STAGES, PreparedPair
 from graspdatagen.runtime import GraspScene, PhysxRuntime
 from graspdatagen.storage import candidates_from_arrays, load_dataset, result_arrays, write_arrays
 from graspdatagen.validation import trial_conditions, validate
@@ -113,7 +113,7 @@ def audit(
 
     initial_object = pose_matrices(arrays["pose_world_object_initial_xyz_xyzw"])
     pair = PreparedPair.load(Path(manifest["gripper_cache"]), Path(manifest["object_cache"]))
-    profile = ValidationProfile(**manifest["protocol"])
+    profile = ValidationProfile.from_saved_protocol(manifest["protocol"])
     candidates = candidates_from_arrays(arrays)
     if not len(candidates):
         raise ValueError("The audit requires a successful nominal grasp")
@@ -170,16 +170,26 @@ def audit(
             "single_finger": {3, 4},
             "wrong_approach": {2},
             "gravity_slip": {5},
-            "late_disturbance": {6, FAILURES.index("joint_constraint_violation")},
+            "late_disturbance": {
+                FAILURES.index("inversion_drop"),
+                FAILURES.index("joint_constraint_violation"),
+            },
         }[name]
         rejected = not result.passed.any() and set(result.failure.ravel()).issubset(expected)
         if name == "late_disturbance":
-            rejected = rejected and bool((result.stage_status[:, :, :4] == 1).all())
-            rejected = rejected and bool((result.stage_status[:, :, 5:] == 0).all())
-            preceding = (acceleration.shape[2] - 1) * round(
-                (profile.disturbance_s + profile.recovery_s) * profile.steps_per_second
-            )
-            rejected = rejected and bool((result.metrics[:, :, 4, -1] > preceding).all())
+            invert = STAGES.index("invert")
+            rejected = rejected and bool((result.stage_status[:, :, :invert] == 1).all())
+            rejected = rejected and bool((result.stage_status[:, :, invert] == -1).all())
+            rejected = rejected and bool((result.stage_status[:, :, invert + 1 :] == 0).all())
+            directions = acceleration.shape[2]
+            invert_steps = round(profile.invert_s * profile.steps_per_second)
+            # validate() selects floor(step * directions / invert_steps).
+            # The final direction starts at ceil((directions - 1) * steps / directions).
+            preceding = ((directions - 1) * invert_steps + directions - 1) // directions
+            motion_steps = result.metrics[
+                :, :, STAGES.index("disturbance") : invert + 1, METRICS.index("steps")
+            ].sum(axis=2)
+            rejected = rejected and bool((motion_steps > preceding).all())
         finger_peaks = result.trace["contact"][:, 0, :2].max(axis=0)
         if isinstance(scene, SingleFingerScene):
             rejected = rejected and bool(
