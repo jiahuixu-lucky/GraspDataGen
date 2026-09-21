@@ -5,17 +5,17 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-
-import numpy as np
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 from fastapi import HTTPException
 from nicegui import app, run, ui
 
 from graspdatagen.config import load_objects
 from graspdatagen.web.data import load_dataset
+from graspdatagen.web.file_picker import pick_dataset
 
 STATIC = Path(__file__).with_name("static")
 
@@ -29,18 +29,20 @@ def serve(
     overview_faces: int,
     grasp_regions: Path,
 ) -> None:
+    available_sources = list(sources)
+
     @lru_cache(maxsize=4)
-    def dataset(index: int) -> dict[str, Any]:
-        return load_dataset(sources[index], objects, grippers, overview_faces)
+    def dataset(source: Path) -> dict[str, Any]:
+        return load_dataset(source, objects, grippers, overview_faces)
 
     @app.get("/grasp-data/{index}")
     async def grasp_data(index: int) -> dict[str, Any]:
-        if not 0 <= index < len(sources):
+        if not 0 <= index < len(available_sources):
             raise HTTPException(404, "Dataset not found")
         try:
-            return await run.io_bound(dataset, index)
+            return await run.io_bound(dataset, available_sources[index])
         except Exception as error:
-            logging.exception("Cannot load grasp dataset %s", sources[index])
+            logging.exception("Cannot load grasp dataset %s", available_sources[index])
             raise HTTPException(422, str(error)) from error
 
     @ui.page("/")
@@ -49,6 +51,26 @@ def serve(
         ui.add_css(STATIC.joinpath("viewer.css").read_text())
         ui.add_body_html("<script>" + STATIC.joinpath("viewer.js").read_text() + "</script>")
         state: dict[str, Any] = {"candidates": [], "index": 0, "playing": False, "ready": False}
+
+        def dataset_options() -> dict[int, str]:
+            return {i: str(path) for i, path in enumerate(available_sources)}
+
+        async def open_dataset(source: Path) -> None:
+            # Validate assets before changing the current selection or scene.
+            await run.io_bound(dataset, source)
+            if source not in available_sources:
+                available_sources.append(source)
+            selected = available_sources.index(source)
+            dataset_select.set_options(dataset_options())
+            if dataset_select.value == selected:
+                await load()
+            else:
+                dataset_select.set_value(selected)
+
+        async def browse_dataset() -> None:
+            await pick_dataset(
+                available_sources[int(dataset_select.value)].parent, open_dataset
+            )
 
         async def command(method: str, *args: Any) -> Any:
             return await ui.run_javascript(
@@ -97,7 +119,7 @@ def serve(
                 return
 
             index = int(dataset_select.value)
-            loaded = dataset(index)
+            loaded = await run.io_bound(dataset, available_sources[index])
             annotation = loaded.get("annotation_mesh")
             if annotation is None:
                 ui.notify(
@@ -164,6 +186,7 @@ def serve(
             play.props("icon=play_arrow")
             controls.style("pointer-events: none; opacity: 0.5")
             dataset_select.set_enabled(False)
+            dataset_open.set_enabled(False)
             loading.set_visibility(True)
             status.set_text("Loading assets")
             try:
@@ -171,7 +194,7 @@ def serve(
                 metadata = await command("load", dataset_index)
                 state.update(candidates=metadata["candidates"], ready=True)
 
-                loaded = dataset(dataset_index)
+                loaded = await run.io_bound(dataset, available_sources[dataset_index])
                 annotation = loaded.get("annotation_mesh")
                 existing = grasp_regions / f"{loaded['object']}.npz"
 
@@ -227,11 +250,13 @@ def serve(
                 status.set_text("Scene ready")
                 controls.style("pointer-events: auto; opacity: 1")
             except Exception as error:
+                state["ready"] = False
                 status.set_text("Load failed")
                 ui.notify(str(error), type="negative", timeout=0, close_button=True)
             finally:
                 loading.set_visibility(False)
                 dataset_select.set_enabled(True)
+                dataset_open.set_enabled(True)
 
         with ui.header().classes("app-header"):
             with ui.row().classes("brand"):
@@ -244,15 +269,22 @@ def serve(
         with ui.element("main").classes("workspace"):
             with ui.column().classes("sidebar"):
                 ui.label("DATASET").classes("eyebrow")
-                dataset_select = (
-                    ui.select(
-                        {i: f"{p.parent.name} / {p.name}" for i, p in enumerate(sources)},
-                        value=0,
-                        on_change=load,
+                with ui.row().classes("dataset-picker"):
+                    dataset_select = (
+                        ui.select(dataset_options(), value=0, on_change=load)
+                        .props("outlined dense options-dense")
+                        .classes("dataset-select")
                     )
-                    .props("outlined dense options-dense")
-                    .classes("w-full dataset-select")
-                )
+                    dataset_select.add_slot("selected-item", '''
+                        <span>{{ props.opt.label.split('/').slice(-2).join(' / ') }}
+                            <q-tooltip>{{ props.opt.label }}</q-tooltip>
+                        </span>
+                    ''')
+                    dataset_open = (
+                        ui.button(icon="folder_open", on_click=browse_dataset)
+                        .props("flat round dense")
+                        .tooltip("Open grasps YAML")
+                    )
                 with ui.row().classes("object-heading"):
                     title = ui.label("Grasp scene").classes("object-title")
                     robot_label = ui.label("").classes("robot-badge")
@@ -276,7 +308,7 @@ def serve(
                         on_change=workspace_changed,
                     ).props("no-caps unelevated")
 
-                    save_region_button = (
+                    (
                         ui.button(
                             "Save region",
                             icon="save",

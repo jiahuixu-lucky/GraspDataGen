@@ -13,6 +13,10 @@ body { background: #f8f9fa; }
 .sidebar { background: #fff; border-right: 1px solid #e1e6e5; padding: 25px 22px 20px;
   gap: 15px; flex-wrap: nowrap; overflow-y: auto; }
 .eyebrow { font-size: 10px; font-weight: 700; color: #88928f; }
+.dataset-picker { width: 100%; align-items: center; flex-wrap: nowrap; gap: 6px; }
+.dataset-select { flex: 1; min-width: 0; }
+.dataset-select .q-field__native > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dataset-dialog { width: 760px; max-width: 95vw !important; }
 .muted { color: #7e8a87; } .small { font-size: 11px; }
 .mono { font-family: 'SFMono-Regular', Consolas, monospace; font-size: 12px; }
 .object-heading { align-items: center; justify-content: space-between; width: 100%; gap: 8px; }

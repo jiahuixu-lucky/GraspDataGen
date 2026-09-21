@@ -26,7 +26,7 @@ uv run --project environments/web --locked python environments/web/serve.py \
 Use `--port 8081` if the port is occupied. `--host 0.0.0.0` enables access from
 other machines. The viewer has no authentication, so bind it only on a trusted
 network, or keep the default loopback address and use SSH port forwarding.
-The HTTP data endpoint exposes only the datasets selected at startup.
+The HTTP data endpoint exposes datasets selected at startup or opened in the UI.
 
 ## Assets and Coordinates
 
@@ -65,6 +65,13 @@ not an MDL renderer. This is a pose inspector, not a physical success evaluator.
 
 ## Viewing
 
+- **Dataset:** click the folder button beside the DATASET selector to browse folders
+  on the server or enter a YAML path (relative paths use the folder being browsed).
+  Click a YAML row, then **Open** to load it without restarting the service.
+  Valid files are added to the dropdown for subsequent switching; invalid files
+  show an error in the dialog and leave the current scene intact. Files retain
+  their adjacent manifest and prepared-cache associations. When connecting from
+  another machine, the picker browses the server's filesystem.
 - **Single grasp / All grasps:** inspect one pose or the entire dataset. All mode
   uses shared geometry and GPU instances for each gripper body, without sampling
   or silently limiting the number of displayed grasps. Dense mesh surfaces are
