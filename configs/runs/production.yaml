@@ -6,12 +6,12 @@ device: 0
 environments: 512
 seed: 20260908
 target_successes: 1024
-candidate_budget: 10240
+candidate_budget: 20480
 time_budget_s: 1800
 object_position_m: [0.25, 0.25, 0.25]
 sampling:
   surface_samples: 16384
-  surface_rounds: 32
+  surface_rounds: 128
   rolls_per_contact: 8
   normal_alignment_min: 0.95
   clearance_m: 0.003
@@ -46,14 +46,17 @@ validation:
   approach_s: 1.5
   close_s: 3.0
   hold_s: 1.0
-  invert_s: 4.0
-  inverted_hold_s: 1.0
+  rotation_s: 4.0
+  translation_s: 2.0
+  final_hold_s: 1.0
+  rotation_limit_rad: 0.5235987755982988
+  translation_distance_m: 0.05
   stable_window_s: 0.20
   contact_loss_s: 0.05
   contact_offset_m: 0.001
   minimum_contact_force_N: 0.05
-  max_translation_m: 0.003
-  max_rotation_rad: 0.10
+  max_translation_m: 0.025
+  max_rotation_rad: 0.50
   max_linear_speed_m_s: 0.01
   max_angular_speed_rad_s: 0.10
   max_joint_speed_m_s: 0.002

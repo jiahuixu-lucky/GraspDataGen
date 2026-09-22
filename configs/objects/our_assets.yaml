@@ -1,34 +1,4 @@
 objects:
-- name: bubble_tea_cup_300g
-  source: Data/our_Assets/bubble_tea_cup/300g/Aligned.usd
-  root_prim: /root
-  metadata: Data/our_Assets/bubble_tea_cup/300g/metadata.json
-  physics: &metadata_mass_030_friction_080
-    mass_kg: 0.3
-    static_friction: 0.8
-    dynamic_friction: 0.8
-    restitution: 0.0
-    source: Existing metadata.json physics; friction initializes both coefficients; zero restitution is the USD fallback.
-- name: bubble_tea_cup_500g
-  source: Data/our_Assets/bubble_tea_cup/500g/Aligned.usd
-  root_prim: /root
-  metadata: Data/our_Assets/bubble_tea_cup/500g/metadata.json
-  physics: &metadata_mass_050_friction_080
-    mass_kg: 0.5
-    static_friction: 0.8
-    dynamic_friction: 0.8
-    restitution: 0.0
-    source: Existing metadata.json physics; friction initializes both coefficients; zero restitution is the USD fallback.
-- name: bubble_tea_cup_800g
-  source: Data/our_Assets/bubble_tea_cup/800g/Aligned.usd
-  root_prim: /root
-  metadata: Data/our_Assets/bubble_tea_cup/800g/metadata.json
-  physics: &metadata_mass_080_friction_080
-    mass_kg: 0.8
-    static_friction: 0.8
-    dynamic_friction: 0.8
-    restitution: 0.0
-    source: Existing metadata.json physics; friction initializes both coefficients; zero restitution is the USD fallback.
 - name: book_000
   source: Data/our_Assets/book/000/Aligned.usd
   root_prim: /root
@@ -89,6 +59,36 @@ objects:
     dynamic_friction: 1.0
     restitution: 0.0
     source: USD MassAPI and PhysicsMaterialAPI; generated metadata mirrors authored mass and friction; zero restitution is the USD fallback.
+- name: bubble_tea_cup_300g
+  source: Data/our_Assets/bubble_tea_cup/300g/Aligned.usd
+  root_prim: /root
+  metadata: Data/our_Assets/bubble_tea_cup/300g/metadata.json
+  physics: &metadata_mass_030_friction_080
+    mass_kg: 0.3
+    static_friction: 0.8
+    dynamic_friction: 0.8
+    restitution: 0.0
+    source: Existing metadata.json physics; friction initializes both coefficients; zero restitution is the USD fallback.
+- name: bubble_tea_cup_500g
+  source: Data/our_Assets/bubble_tea_cup/500g/Aligned.usd
+  root_prim: /root
+  metadata: Data/our_Assets/bubble_tea_cup/500g/metadata.json
+  physics: &metadata_mass_050_friction_080
+    mass_kg: 0.5
+    static_friction: 0.8
+    dynamic_friction: 0.8
+    restitution: 0.0
+    source: Existing metadata.json physics; friction initializes both coefficients; zero restitution is the USD fallback.
+- name: bubble_tea_cup_800g
+  source: Data/our_Assets/bubble_tea_cup/800g/Aligned.usd
+  root_prim: /root
+  metadata: Data/our_Assets/bubble_tea_cup/800g/metadata.json
+  physics: &metadata_mass_080_friction_080
+    mass_kg: 0.8
+    static_friction: 0.8
+    dynamic_friction: 0.8
+    restitution: 0.0
+    source: Existing metadata.json physics; friction initializes both coefficients; zero restitution is the USD fallback.
 - name: can_001
   source: Data/our_Assets/can/001/Aligned.usd
   root_prim: /root
