@@ -176,7 +176,9 @@ def generate_pair(
                     "upright dynamic object with seeded yaw; gravity off reset/approach/close"
                 ),
                 "pickup_posture": asdict(config.posture),
-                "inversion": "post-pickup holding validation rotates pi about world X",
+                "holding_motion": (
+                    "approach-axis +/- rotation followed by horizontal out-and-back travel"
+                ),
             },
             "stage_names": STAGES,
             "metric_names": METRICS,
@@ -326,7 +328,7 @@ def generate_pair(
             write_arrays(trace_path, trace)
             from graspdatagen.reporting import inspect_trace
 
-            inspect_trace(pair, trace_path, directory / "inspection.png")
+            inspect_trace(pair, trace_path, directory / "inspection.png", STAGES)
         manifest.update(
             successes=len(successful),
             attempted=manifest["attempted"] + len(batch),

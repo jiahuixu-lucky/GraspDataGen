@@ -171,25 +171,25 @@ def audit(
             "wrong_approach": {2},
             "gravity_slip": {5},
             "late_disturbance": {
-                FAILURES.index("inversion_drop"),
+                FAILURES.index("translation_slip"),
                 FAILURES.index("joint_constraint_violation"),
             },
         }[name]
         rejected = not result.passed.any() and set(result.failure.ravel()).issubset(expected)
         if name == "late_disturbance":
-            invert = STAGES.index("invert")
-            rejected = rejected and bool((result.stage_status[:, :, :invert] == 1).all())
-            rejected = rejected and bool((result.stage_status[:, :, invert] == -1).all())
-            rejected = rejected and bool((result.stage_status[:, :, invert + 1 :] == 0).all())
+            translation = STAGES.index("translation")
+            rejected = rejected and bool((result.stage_status[:, :, :translation] == 1).all())
+            rejected = rejected and bool((result.stage_status[:, :, translation] == -1).all())
+            rejected = rejected and bool((result.stage_status[:, :, translation + 1 :] == 0).all())
             directions = acceleration.shape[2]
-            invert_steps = round(profile.invert_s * profile.steps_per_second)
-            # validate() selects floor(step * directions / invert_steps).
-            # The final direction starts at ceil((directions - 1) * steps / directions).
-            preceding = ((directions - 1) * invert_steps + directions - 1) // directions
-            motion_steps = result.metrics[
-                :, :, STAGES.index("disturbance") : invert + 1, METRICS.index("steps")
+            total_motion_steps = round(
+                (profile.rotation_s + profile.translation_s) * profile.steps_per_second
+            )
+            preceding = ((directions - 1) * total_motion_steps + directions - 1) // directions
+            executed_steps = result.metrics[
+                :, :, STAGES.index("rotation") : translation + 1, METRICS.index("steps")
             ].sum(axis=2)
-            rejected = rejected and bool((motion_steps > preceding).all())
+            rejected = rejected and bool((executed_steps > preceding).all())
         finger_peaks = result.trace["contact"][:, 0, :2].max(axis=0)
         if isinstance(scene, SingleFingerScene):
             rejected = rejected and bool(

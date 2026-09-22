@@ -59,7 +59,7 @@ class CandidateBatch:
         return CandidateBatch(*(getattr(self, name)[indices] for name in self.__dataclass_fields__))
 
 
-STAGES = ("reset", "approach", "close", "gravity_hold", "disturbance", "invert", "inverted_hold")
+STAGES = ("reset", "approach", "close", "gravity_hold", "rotation", "translation", "final_hold")
 METRICS = (
     "min_contact_N",
     "max_translation_m",
@@ -90,8 +90,9 @@ FAILURES = (
     "no_bilateral_contact",
     "closure_unstable",
     "gravity_slip",
-    "disturbance_slip",
-    "inversion_drop",
+    "rotation_slip",
+    "translation_slip",
+    "final_hold_slip",
     "solver_invalid",
     "joint_constraint_violation",
 )

@@ -12,11 +12,13 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from graspdatagen.inspection import fit_axes, frame_plot, mesh_plot
-from graspdatagen.records import STAGES, PreparedPair
+from graspdatagen.records import PreparedPair
 from graspdatagen.sampling import gripper_meshes
 
 
-def inspect_trace(pair: PreparedPair, trace_path: Path, output: Path) -> None:
+def inspect_trace(
+    pair: PreparedPair, trace_path: Path, output: Path, stages: tuple[str, ...]
+) -> None:
     with np.load(pair.object / "geometry.npz", allow_pickle=False) as geometry:
         object_mesh = trimesh.util.concatenate(
             [
@@ -43,6 +45,6 @@ def inspect_trace(pair: PreparedPair, trace_path: Path, output: Path) -> None:
                 mesh_plot(axis, mesh, "#86aeb7")
             frame_plot(axis, trace["tcp"][frame], 0.025)
             fit_axes(axis, np.vstack([object_world.bounds, *(m.bounds for m in meshes)]))
-            axis.set_title(STAGES[stage], fontsize=11)
+            axis.set_title(stages[stage], fontsize=11)
         figure.savefig(output, dpi=130)
         plt.close(figure)

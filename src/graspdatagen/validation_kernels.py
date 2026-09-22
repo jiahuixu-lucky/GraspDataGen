@@ -9,6 +9,10 @@ import warp as wp
 
 from graspdatagen.records import FAILURES, METRICS
 
+GRAVITY_FAILURE = wp.constant(FAILURES.index("gravity_slip"))
+ROTATION_FAILURE = wp.constant(FAILURES.index("rotation_slip"))
+TRANSLATION_FAILURE = wp.constant(FAILURES.index("translation_slip"))
+FINAL_HOLD_FAILURE = wp.constant(FAILURES.index("final_hold_slip"))
 JOINT_FAILURE = wp.constant(FAILURES.index("joint_constraint_violation"))
 METRIC_COUNT = wp.constant(len(METRICS))
 
@@ -234,11 +238,13 @@ def observe_grasps(
     if wp.max(mimic_error, limit_error) > p.joint_tolerance_m:
         code = JOINT_FAILURE
     palm = palm_force >= p.minimum_contact_force_N
-    hold_failure = int(7)
+    hold_failure = FINAL_HOLD_FAILURE
     if stage == 3:
-        hold_failure = 5
+        hold_failure = GRAVITY_FAILURE
     elif stage == 4:
-        hold_failure = 6
+        hold_failure = ROTATION_FAILURE
+    elif stage == 5:
+        hold_failure = TRANSLATION_FAILURE
     if stage <= 1:
         moved = pose_error(s.initial[env], object_pose)
         collision = moved[0] > p.approach_translation_m or moved[1] > p.approach_rotation_rad
