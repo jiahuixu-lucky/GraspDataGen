@@ -1,102 +1,49 @@
 # Web Grasp Viewer
 
-The NiceGUI page renders USD geometry with Three.js in the browser. Asset reading
-and forward kinematics run on the CPU; the web server does not initialize Isaac
-Sim, CUDA, or a physics simulation. Run commands from the repository root.
-
-`environments/web` has its own locked dependencies and virtual environment. Its
-`usd-core` is deliberately isolated from Isaac Sim's USD/PhysX plugins. Do not
-install the web environment's dependencies into the root simulation environment.
+Run from the repository root after [installation](installation.md):
 
 ```bash
-uv run --project environments/web --locked python environments/web/serve.py
+uv run --locked python -m graspdatagen.web
 ```
 
-Open http://127.0.0.1:8080. By default the dataset selector discovers
-`outputs/**/grasps.yaml` and `grasps.yaml` beside objects listed in
-`configs/objects/production.yaml`. An empty collection produces a CLI error.
-Select specific files, including datasets outside `outputs`, with:
+Open http://127.0.0.1:8080. The server reads assets on the CPU without starting
+Isaac Sim or CUDA; the browser renders with Three.js.
+
+By default, it discovers `outputs/**/grasps.yaml` and files beside objects in
+`configs/objects/production.yaml`. To select a dataset explicitly:
 
 ```bash
-uv run --project environments/web --locked python environments/web/serve.py \
-  --grasps outputs/our-assets/piper--bubble_tea_cup_300g/grasps.yaml \
-           outputs/our-assets/arx_x5--bubble_tea_cup_300g/grasps.yaml
+uv run --locked python -m graspdatagen.web \
+  --grasps outputs/our-assets/piper--bubble_tea_cup_300g/grasps.yaml
 ```
 
-Use `--port 8081` if the port is occupied. `--host 0.0.0.0` enables access from
-other machines. The viewer has no authentication, so bind it only on a trusted
-network, or keep the default loopback address and use SSH port forwarding.
-The HTTP data endpoint exposes datasets selected at startup or opened in the UI.
+Use `--port` to change the port and `--host 0.0.0.0` for remote access.
+The viewer has no authentication and can browse server files; use a trusted
+network or SSH port forwarding.
 
-## Assets and Coordinates
+## Dataset requirements
 
-With an adjacent `manifest.json`, the viewer uses the prepared object and gripper
-caches referenced by that manifest, including its calibrated TCP. Retain those
-caches with the dataset. Cache fingerprints and robot/object identities are checked.
-Missing or invalid caches are reported as errors.
+Keep the adjacent `manifest.json` and its referenced prepared caches with each
+dataset. Standalone YAML without a manifest resolves source assets through
+`--objects` (default `configs/objects/production.yaml`) and `--grippers`
+(default `configs/grippers/*.yaml`). Set these when viewing another asset collection.
 
-For standalone YAML files, such as `Assets/Object/Rigid/bottle/grasps.yaml`, the
-viewer resolves the object name through `--objects` and robot name through
-`--grippers`. Their defaults are the existing production object list and the
-YAML files in `configs/grippers`. Override them when viewing another asset set:
+Poses use the object-root frame, metres and Z up. Fingers use recorded closed
+joint positions. Source visuals take precedence over collision meshes; unsupported
+material networks fall back to display colors. This viewer inspects poses;
+use `graspdatagen replay` for physical validation.
 
-```bash
-uv run --project environments/web --locked python environments/web/serve.py \
-  --grasps Assets/Object/Rigid/bottle/grasps.yaml \
-  --objects configs/objects/production.yaml \
-  --grippers configs/grippers/piper.yaml
-```
+## Controls
 
-Standalone files depend on the current source assets and configurations. Keep
-the original manifest and prepared caches for reproducible historical inspection.
+- **Dataset:** select a dataset or use the folder button to open YAML on the server.
+- **Single grasp / All grasps:** inspect one pose or the full distribution. All mode
+  simplifies meshes to 3,000 triangles each (`--overview-faces`); selected grasps
+  retain full geometry.
+- **Navigation:** previous/next, zero-based candidate ID, timeline, playback or click a grasp.
+- **Display:** opacity, wireframe, object visibility, TCP axes and grid.
+- **Camera:** orbit, pan, zoom, fit, front/top views; the camera button downloads a PNG.
+- **Annotate:** paint allowed surface regions; Shift+click erases. Annotations are
+  stored under `annotations/grasp_regions` (`--grasp-regions` overrides it).
 
-All geometry is expressed in the object-root frame, in metres with Z up.
-Gripper bodies use `T_object_tcp @ inverse(T_base_tcp) @ T_base_body`, with
-`T_base_body` evaluated from USD fixed/prismatic joints and each candidate's
-recorded closed joint positions. No opening estimate or simulated closure is used.
-Malformed poses, nonfinite states, unsupported joints, and mismatched joint names
-are rejected.
-
-Visible source meshes take precedence over collision meshes. Old caches containing
-only collision geometry are supported and marked `collision gripper`. Object
-display colors and OmniPBR diffuse textures with vertex or triangular face-corner
-UVs are transferred. Other material networks use display colors; the browser is
-not an MDL renderer. This is a pose inspector, not a physical success evaluator.
-
-## Viewing
-
-- **Dataset:** click the folder button beside the DATASET selector to browse folders
-  on the server or enter a YAML path (relative paths use the folder being browsed).
-  Click a YAML row, then **Open** to load it without restarting the service.
-  Valid files are added to the dropdown for subsequent switching; invalid files
-  show an error in the dialog and leave the current scene intact. Files retain
-  their adjacent manifest and prepared-cache associations. When connecting from
-  another machine, the picker browses the server's filesystem.
-- **Single grasp / All grasps:** inspect one pose or the entire dataset. All mode
-  uses shared geometry and GPU instances for each gripper body, without sampling
-  or silently limiting the number of displayed grasps. Dense mesh surfaces are
-  simplified to 3,000 triangles per mesh in this mode (`--overview-faces` changes
-  the budget); selected grasps always retain full geometry. Poses and closure
-  transforms are identical in both representations.
-- **Navigation:** previous/next, candidate ID, timeline, playback, or click a
-  gripper in the distribution. IDs are zero-based; the timeline shows position
-  within the collection. Selection remains opaque and amber in both modes.
-- **Display:** distribution opacity, wireframe, object visibility, selected TCP
-  axes, and ground grid. Approach colors blend X/Y/Z colors by the absolute
-  components of the approach axis; opposite directions share a color.
-- **Camera:** orbit, zoom, pan, fit, front, and top views. The camera fits the full
-  distribution and adapts to the viewport aspect ratio.
-- **Image:** the camera button downloads a PNG of the current 3D view.
-
-Scene loading displays its current stage. Geometry uses compressed binary buffers
-with the same float32 precision used for browser rendering; grasp poses and joint
-states are unchanged. Asset reading, serialization, and compression run outside
-the server event loop. The exact annotation surface is downloaded and built only
-when entering **Annotate**; saved NPZ files retain the original server geometry
-and face indices. Load and initialization errors dismiss the loading overlay and
-offer **Retry**. A stalled scene request is aborted after 60 seconds.
-
-Each browser tab owns its selection and display state. Up to four loaded datasets
-are cached by the server; restart after modifying files on disk. Instance rendering
-reduces geometry duplication, but very large datasets still require memory for
-their transforms and can be slower with overlapping transparent surfaces.
+Each tab has independent view state. Restart the server after changing loaded
+files on disk.

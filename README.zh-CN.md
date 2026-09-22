@@ -6,9 +6,6 @@ GraspDataGen 基于 Isaac Sim 6.0.1、PhysX 和 Warp，从刚体 USD/USDZ 资产
 
 ```bash
 uv sync --locked
-export OMNI_KIT_ACCEPT_EULA=YES
-export OPENBLAS_NUM_THREADS=1
-export OMP_NUM_THREADS=8
 uv run graspdatagen generate --config configs/runs/production.yaml
 ```
 
@@ -25,7 +22,7 @@ Web 查看器地址为 http://127.0.0.1:8080。恢复任务使用 `--resume`，�
 详细说明：
 
 - [安装与 CLI](docs/installation.md)
-- [数据与坐标约定](docs/contracts.md)
 - [Web 查看器](docs/web-viewer.md)
 - [夹爪适配](docs/grippers.md)
-- [状态与待办](docs/refactor-plan.md)
+- [采样与恢复](docs/sampling.md)
+- [状态与待办](docs/status.md)
