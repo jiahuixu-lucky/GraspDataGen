@@ -235,8 +235,11 @@ class ValidationProfile:
     approach_s: float
     close_s: float
     hold_s: float
-    invert_s: float
-    inverted_hold_s: float
+    rotation_s: float
+    translation_s: float
+    final_hold_s: float
+    rotation_limit_rad: float
+    translation_distance_m: float
     stable_window_s: float
     contact_loss_s: float
     contact_offset_m: float
@@ -289,23 +292,24 @@ class ValidationProfile:
             "approach_s",
             "close_s",
             "hold_s",
-            "invert_s",
-            "inverted_hold_s",
             "stable_window_s",
             "contact_loss_s",
         ):
             steps = getattr(self, name) * self.steps_per_second
             if not np.isclose(steps, round(steps)) or steps < 1:
                 raise ValueError(f"{name} must contain a positive integral number of steps")
-        if self.stable_window_s > min(self.close_s, self.hold_s, self.inverted_hold_s):
+        for name, parts in (("rotation_s", 4), ("translation_s", 2), ("final_hold_s", 1)):
+            steps = getattr(self, name) * self.steps_per_second
+            if not np.isclose(steps, round(steps)) or round(steps) < parts or round(steps) % parts:
+                raise ValueError(f"{name} must contain a positive multiple of {parts} steps")
+        if self.rotation_limit_rad > np.pi / 2:
+            raise ValueError("Rotation exceeds 90 degrees")
+        if self.stable_window_s > min(self.close_s, self.hold_s, self.final_hold_s):
             raise ValueError("Stable window exceeds a holding stage")
 
     @classmethod
     def from_saved_protocol(cls, protocol: dict[str, Any]) -> ValidationProfile:
-        """Replay/audit need current fields from manifests that retain retired settings.
-
-        New run configurations still use the strict constructor to reject unknown keys.
-        """
+        """Read current fields from saved manifests that may include retired metadata."""
         return cls(**{name: protocol[name] for name in cls.__dataclass_fields__})
 
 
@@ -341,7 +345,7 @@ class SamplingConfig:
 
 @dataclass(frozen=True)
 class PostureConfig:
-    """Upright pickup convention, applied before the deliberate holding inversion.
+    """Upright pickup convention, applied before the holding motions.
 
     Each supported gripper supplies its mounting-side up vector in the base frame.
     The object up vector is in its original root frame; initial placement preserves it.

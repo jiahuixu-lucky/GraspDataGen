@@ -13,6 +13,10 @@ from graspdatagen.records import FAILURES, METRICS, STAGES, CandidateBatch, Vali
 from graspdatagen.runtime import GraspScene
 
 
+def smooth_motion(phase: float) -> float:
+    return phase**3 * (10 - 15 * phase + 6 * phase**2)
+
+
 def trial_conditions(
     batch: CandidateBatch, profile: ValidationProfile, seed: int
 ) -> tuple[np.ndarray, FloatArray]:
@@ -166,46 +170,63 @@ def validate(
         if device_trial.alive == 0:
             print_stage_profile()
             return device_trial
-        # World X is horizontal. Rotate the held state around each target TCP;
-        # Apply the configured disturbance directions during that existing motion
-        # so validation adds no standalone disturbance or recovery physics steps.
-        # the object remains dynamic throughout the motion and final gravity hold.
+        rotation_steps = round(p.rotation_s * p.steps_per_second)
+        translation_steps = round(p.translation_s * p.steps_per_second)
+        quarter = rotation_steps // 4
+        half = rotation_steps // 2
+        motion_steps = rotation_steps + translation_steps
+        directions = accelerations.shape[2]
         pivot = (target_base @ T_B_tcp)[:, :3, 3]
+        approach = (initial_object @ batch.target)[:, :3, :3] @ scene.pair.arrays[
+            "approach_axis_tcp"
+        ]
+        lateral = np.column_stack((-approach[:, 1], approach[:, 0], np.zeros(n)))
+        lateral[np.linalg.norm(lateral, axis=1) < 1e-8] = (1.0, 0.0, 0.0)
+        lateral /= np.linalg.norm(lateral, axis=1)[:, None]
         base = target_base.copy()
-        invert_steps = round(p.invert_s * p.steps_per_second)
-        direction_count = accelerations.shape[2]
 
-        for step in range(invert_steps):
-            fraction = (step + 1) / invert_steps
-            blend = fraction**3 * (10 - 15 * fraction + 6 * fraction**2)
-            rotation = Rotation.from_rotvec([np.pi * blend, 0, 0]).as_matrix()
+        for step in range(rotation_steps):
+            if step < quarter:
+                phase = (step + 1) / quarter
+                angle = -p.rotation_limit_rad * smooth_motion(phase)
+            elif step < quarter + half:
+                phase = (step - quarter + 1) / half
+                angle = p.rotation_limit_rad * (-1 + 2 * smooth_motion(phase))
+            else:
+                phase = (step - quarter - half + 1) / quarter
+                angle = p.rotation_limit_rad * (1 - smooth_motion(phase))
+            rotation = Rotation.from_rotvec(approach * angle).as_matrix()
             base[:, :3, :3] = rotation @ target_base[:, :3, :3]
-            base[:, :3, 3] = pivot + (target_base[:, :3, 3] - pivot) @ rotation.T
-
-            direction = min(
-                step * direction_count // invert_steps,
-                direction_count - 1,
+            base[:, :3, 3] = pivot + np.einsum(
+                "nij,nj->ni", rotation, target_base[:, :3, 3] - pivot
             )
-            scene.force(accelerations[:, trial, direction])
+            scene.force(accelerations[:, trial, step * directions // motion_steps])
             scene.move_base(matrix_poses(base))
-
-            # Reuse the first inversion tick for the removed disturbance stage.
-            # This preserves the existing seven-stage output schema without
-            # adding a physics step; all remaining ticks belong to inversion.
-            observe(4 if step == 0 else 5, True, False)
-
+            observe(4, True, False)
             if device_trial.alive == 0:
                 scene.force(zero_force)
-                print(
-                    f"P2 EARLY_EXIT trial={trial} stage=invert step={step + 1}/{invert_steps}",
-                    flush=True,
-                )
+                print_stage_profile()
+                return device_trial
+
+        half = translation_steps // 2
+        base = target_base.copy()
+        for step in range(translation_steps):
+            phase = (step + 1) / half if step < half else (step - half + 1) / half
+            blend = smooth_motion(phase)
+            distance = p.translation_distance_m * (blend if step < half else 1 - blend)
+            base[:, :3, 3] = target_base[:, :3, 3] + distance * lateral
+            direction = (rotation_steps + step) * directions // motion_steps
+            scene.force(accelerations[:, trial, direction])
+            scene.move_base(matrix_poses(base))
+            observe(5, True, False)
+            if device_trial.alive == 0:
+                scene.force(zero_force)
                 print_stage_profile()
                 return device_trial
         scene.force(zero_force)
         device_trial.state.stable.zero_()
-        for step in range(round(p.inverted_hold_s * p.steps_per_second)):
-            observe(6, True, step == round(p.inverted_hold_s * p.steps_per_second) - 1)
+        for step in range(round(p.final_hold_s * p.steps_per_second)):
+            observe(6, True, step == round(p.final_hold_s * p.steps_per_second) - 1)
         scene.force(zero_force)
 
         print_stage_profile()
