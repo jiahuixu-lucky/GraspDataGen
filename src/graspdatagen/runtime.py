@@ -41,10 +41,14 @@ class RuntimeConfig:
 class PhysxRuntime:
     """Own Kit and recreate scenes only after stopping and invalidating views."""
 
-    def __init__(self, config: RuntimeConfig, gui: bool = False) -> None:
-        """Enable GUI for watching validation; preparation and batch jobs omit it."""
+    def __init__(
+        self, config: RuntimeConfig, gui: bool = False, renderer_gpu_index: int = 0
+    ) -> None:
+        """The renderer uses Vulkan indices; physics uses CUDA indices."""
         if version("isaacsim") != "6.0.1.0":
             raise RuntimeError("The native runtime requires isaacsim==6.0.1.0")
+        if renderer_gpu_index < 0:
+            raise ValueError("Renderer GPU index must be nonnegative")
         from isaacsim import SimulationApp
 
         self.config: RuntimeConfig = config
@@ -55,7 +59,7 @@ class PhysxRuntime:
         self.app: SimulationApp = SimulationApp(
             {
                 "headless": not gui,
-                "active_gpu": config.device_index,
+                "active_gpu": renderer_gpu_index if gui else config.device_index,
                 "physics_gpu": config.device_index,
                 "multi_gpu": False,
                 "fast_shutdown": True,

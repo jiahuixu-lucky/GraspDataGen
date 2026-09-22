@@ -98,7 +98,9 @@ def data_worker(args: argparse.Namespace) -> None:
     else:
         saved = json.loads((args.run / "manifest.json").read_text())
         device, rate = args.device, saved["protocol"]["steps_per_second"]
-    runtime = PhysxRuntime(RuntimeConfig(device, rate), gui=args.gui)
+    runtime = PhysxRuntime(
+        RuntimeConfig(device, rate), gui=args.gui, renderer_gpu_index=args.renderer_gpu
+    )
     try:
         if args.command == "generate":
             from graspdatagen.pipeline import generate
@@ -120,6 +122,11 @@ def data_worker(args: argparse.Namespace) -> None:
 
             report.update(audit(runtime, args.run, args.config, args.output, args.case))
         write_json(args.output, report)
+        if args.gui:
+            print("Validation finished; close the Isaac Sim window to exit.", flush=True)
+            while runtime.app.is_running():
+                runtime.render_elapsed = 1 / 30
+                runtime.render()
     except Exception as error:
         report["error"] = {"type": type(error).__name__, "message": str(error)}
         write_json(args.output, report)
@@ -301,6 +308,10 @@ def main() -> None:
         command.add_argument(
             "--gui", action="store_true", help="Watch all parallel trials in a live viewport"
         )
+        command.add_argument(
+            "--renderer-gpu", type=int, default=0,
+            help="Vulkan renderer index for --gui; physics uses the run's CUDA device",
+        )
     args = parser.parse_args()
     if args.command == "view":
         if not os.environ.get("DISPLAY"):
@@ -323,6 +334,14 @@ def main() -> None:
         parser.error(
             "--gui requires DISPLAY; run from a local or remote graphical desktop terminal"
         )
+    if args.command in ("generate", "replay", "audit") and args.gui:
+        if "CUDA_VISIBLE_DEVICES" in os.environ:
+            parser.error(
+                "--gui requires CUDA_VISIBLE_DEVICES unset; "
+                "use env -u CUDA_VISIBLE_DEVICES"
+            )
+        if args.renderer_gpu < 0:
+            parser.error("--renderer-gpu must be nonnegative")
     lock_fds: tuple[int, ...] = ()
     if args.command == "generate":
         config = load_run(args.config)
