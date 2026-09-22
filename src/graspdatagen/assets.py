@@ -16,6 +16,7 @@ import trimesh
 
 from graspdatagen.config import MaterialConfig, ObjectConfig, digest
 from graspdatagen.geometry import (
+    author_mesh,
     mesh_in_frame,
     relative_transform,
     set_transform,
@@ -414,7 +415,7 @@ def inspect_object(config: ObjectConfig) -> dict[str, Any]:
 
 
 def prepare_object(runtime: PhysxRuntime, config: ObjectConfig, cache_root: Path) -> Path:
-    from pxr import Gf, Sdf, Usd, UsdGeom, UsdPhysics, UsdShade
+    from pxr import Gf, Usd, UsdGeom, UsdPhysics
 
     fingerprint = source_fingerprint(config.source)
     fingerprint["files"][str(config.metadata)] = file_hash(config.metadata)
@@ -499,19 +500,12 @@ def prepare_object(runtime: PhysxRuntime, config: ObjectConfig, cache_root: Path
                 mass.CreatePrincipalAxesAttr(source_mass.GetPrincipalAxesAttr().Get())
             collider_prims = []
             UsdGeom.Xform.Define(prepared, "/root/collisions")
-            for index, item in enumerate(inspection["colliders"]):
-                path = f"/root/collisions/mesh_{index:03d}"
-                Sdf.CopySpec(stage.GetRootLayer(), item["collider"], prepared.GetRootLayer(), path)
-                prim = prepared.GetPrimAtPath(path)
-                transform = relative_transform(stage.GetPrimAtPath(item["collider"]), root)
-                transform[:3, :] *= unit
-                set_transform(prim, transform)
-                # CopySpec may preserve material bindings on descendant GeomSubsets.
-                # Those bindings can target source-only materials that are not copied
-                # into object.usdc. Remove all source material bindings recursively;
-                # the prepared collider receives GraspDataGen's resolved material below.
-                for descendant in Usd.PrimRange(prim):
-                    UsdShade.MaterialBindingAPI(descendant).UnbindAllBindings()
+            # Persist the source asset's cooked hulls, already in the metre object
+            # frame. Parallel scenes need no high-resolution source collision mesh.
+            for index, hull in enumerate(hulls):
+                prim = author_mesh(prepared, f"/root/collisions/mesh_{index:03d}", hull)
+                UsdPhysics.CollisionAPI.Apply(prim)
+                UsdPhysics.MeshCollisionAPI.Apply(prim).CreateApproximationAttr("convexHull")
                 collider_prims.append(prim)
             bind_material(prepared, collider_prims, config.material)
             prepared.GetRootLayer().Save()
@@ -563,6 +557,7 @@ def prepare_object(runtime: PhysxRuntime, config: ObjectConfig, cache_root: Path
                     "config": config.snapshot,
                     "inspection": inspection,
                     "collision_source": "source_asset",
+                    "collision_representation": "cooked_convex_hulls",
                     "cooked_hulls": len(hulls),
                     "collision_vertices": sum(len(h.vertices) for h in hulls),
                     "collision_triangles": sum(len(h.faces) for h in hulls),
