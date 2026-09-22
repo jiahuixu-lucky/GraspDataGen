@@ -84,10 +84,13 @@ class PhysxRuntime:
 
         self.manager: type[SimulationManager] = SimulationManager
         try:
+            import torch
+
             if not self.manager.switch_physics_engine("physx"):
                 raise RuntimeError("PhysX could not be activated")
             self.manager.set_device(f"cuda:{config.device_index}")
             self.new_scene()
+            torch.cuda.set_device(config.device_index)
         except BaseException:
             print_exc()
             self.close(exit_code=1)
