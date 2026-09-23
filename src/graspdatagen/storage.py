@@ -172,7 +172,7 @@ def load_dataset(directory: Path) -> tuple[dict[str, Any], dict[str, np.ndarray]
 
 
 def export_grasps_yaml(directory: Path) -> Path:
-    """Export verified successes; approach axes follow actual closure in object coordinates."""
+    """Export grasps-<robot>.yaml beside the source USD, replacing that robot's prior export."""
     manifest, arrays = load_dataset(directory)
     robot_path = Path(manifest["gripper_cache"]) / "robot_snapshot.json"
     if file_hash(robot_path) != manifest["gripper"]["artifacts"]["robot_snapshot.json"]:
@@ -205,14 +205,14 @@ def export_grasps_yaml(directory: Path) -> Path:
             for index, (pose, axis) in enumerate(zip(poses, axes, strict=True))
         ],
     }
-    path = directory / "grasps.yaml"
+    path = Path(manifest["object"]["config"]["source"]).with_name(f"grasps-{robot}.yaml")
     temporary = path.with_suffix(".yaml.tmp")
     with temporary.open("w") as stream:
         yaml.safe_dump(data, stream, sort_keys=False, default_flow_style=None, width=120)
         stream.flush()
         os.fsync(stream.fileno())
     temporary.replace(path)
-    sync_directory(directory)
+    sync_directory(path.parent)
     return path
 
 

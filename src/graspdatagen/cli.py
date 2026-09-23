@@ -237,7 +237,7 @@ def run_parallel_generate(config_path: Path, devices: tuple[int, ...], resume: b
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    export = commands.add_parser("export", help="Export verified grasps to compact grasps.yaml")
+    export = commands.add_parser("export", help="Export grasps-<robot>.yaml beside the object USD")
     export.add_argument("--run", type=Path, required=True)
     view = commands.add_parser(
         "view", help="Inspect static grasp poses from compact YAML in Isaac Sim"

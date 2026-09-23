@@ -585,9 +585,10 @@ def main() -> None:
     if not sources:
         sources = sorted(Path("outputs").rglob("grasps.yaml"))
         sources += [
-            o.source.with_name("grasps.yaml")
+            path
             for o in load_objects(args.objects)
-            if o.source.with_name("grasps.yaml").is_file()
+            for path in sorted(o.source.parent.glob("grasps*.yaml"))
+            if path.is_file()
         ]
     sources = list(dict.fromkeys(p.resolve() for p in sources))
     if not sources or any(not p.is_file() for p in sources):
