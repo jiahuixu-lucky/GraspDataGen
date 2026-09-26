@@ -6,11 +6,12 @@ branch to sampling or validation.
 
 1. Provide the source USD and a portable `configs/robots/` snapshot containing
    the actual TCP parent frame, metre offset, `xyzw` rotation, active joint and
-   finger body names. Imported actuator `null` means inherit USD only at this
-   boundary; prepared drives have concrete values.
+   finger body names. Drives and limits always inherit USD; there are no nullable
+   actuator overrides, duplicate actuator joint lists or mandatory URDF inputs.
 2. Define retained bodies, joints, TCP parent prim, both finger collider paths,
-   approach/opening axes, contact region, material source and calibration settings
-   in `configs/grippers/`. Keep palm and fixed attachments that affect approach
+   approach/opening axes, `wrist_up_axis_base`, contact region and material source
+   in `configs/grippers/`. The `calibration` path selects the shared
+   `configs/calibration.yaml` file. Keep palm and fixed attachments that affect approach
    clearance. ARX retains the camera mount geometry without enabling a camera.
 3. Run `uv run --locked graspdatagen prepare` with this configuration, an object
    manifest and an output report. Preparation remaps relationships, preserves
@@ -23,7 +24,7 @@ branch to sampling or validation.
    finite drive limits and convergence. Aperture comes from opposing contact
    surfaces, not rigid-body centres or twice a single-finger offset.
 5. Check the TCP against the complete source robot, including the entire parent
-   transform chain. Add the actual mounting-side up axis to the run posture
+   transform chain. Define the actual mounting-side up axis in the gripper
    configuration, then generate and replay complete physical trials in a new
    output directory. Report unsupported geometry or control limits explicitly.
 

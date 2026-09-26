@@ -27,18 +27,30 @@ prepared assets go to `outputs/prepared/`.
 
 ```text
 Assets/Robots/piper/Piper.usd
-Assets/Robots/piper/piper_description/urdf/piper.urdf
 Assets/Robots/x5/ARX.usd
-Assets/Robots/x5/X5A.urdf
-Data/our_Assets/bubble_tea_cup/300g/Aligned.usd
-Data/our_Assets/bubble_tea_cup/300g/metadata.json
+Data/Assets/Object/Rigid/bubble_tea_cup/300g/Aligned.usd
 ```
 
 Supply all 25 objects listed in `configs/objects/our_assets.yaml`, including
-referenced layers, meshes, materials and textures. The three bubble tea cup variants
-require their source `metadata.json`; the other metadata files are included in
-`configs/objects/our_assets_metadata/`. Robot TCP definitions are in `configs/robots/`.
-The older bottle/matryoshka collection uses `configs/objects/production.yaml`.
+referenced layers, meshes, materials and textures. Object YAMLs are authoritative
+for mass, friction, restitution and the original-frame up axis; separate metadata
+JSON files are not required. Robot TCP definitions are in `configs/robots/`;
+joint drives and limits come from USD, without a URDF dependency.
+
+### Configuration map
+
+- Current production: `configs/runs/production.yaml` selects
+  `configs/objects/our_assets.yaml`.
+- GUI diagnostic run: `configs/runs/gui-test.yaml` selects `objects: [shampoo_000]`
+  from the same object manifest.
+- Shared sampling, posture and validation: `configs/parameters.yaml`.
+- Shared gripper calibration: `configs/calibration.yaml`.
+- Legacy assets: `configs/objects/bottle_matryoshka.yaml`.
+- Historical runs: `configs/experiments/`; these select `objects: [bottle]` and
+  require the configured annotation directory. They are not ready-to-run production presets.
+- Audit counterexamples: `configs/audit.yaml`, a separate schema from generation.
+
+See [configuration ownership, overrides and migration](configuration.md).
 
 ## Generate and validate
 
@@ -46,18 +58,21 @@ The older bottle/matryoshka collection uses `configs/objects/production.yaml`.
 uv run --locked graspdatagen generate --config configs/runs/production.yaml
 uv run --locked graspdatagen generate --config configs/runs/production.yaml --resume
 
-uv run --locked graspdatagen replay --run outputs/our-assets/piper--bubble_tea_cup_300g \
+uv run --locked graspdatagen replay --run outputs/our-assets-production/piper--bubble_tea_cup_300g \
   --output outputs/replay/piper--bubble_tea_cup_300g.json
-uv run --locked graspdatagen audit --run outputs/our-assets/piper--bubble_tea_cup_300g \
-  --config configs/runs/audit.yaml --output outputs/audit/piper--bubble_tea_cup_300g.json
+uv run --locked graspdatagen audit --run outputs/our-assets-production/piper--bubble_tea_cup_300g \
+  --config configs/audit.yaml --output outputs/audit/piper--bubble_tea_cup_300g.json
 ```
 
-The production YAML controls assets, cache, output, GPU, sampling and validation.
-It requests 512 environments and 1,024 distinct successes per object/gripper pair;
+The production YAML selects assets, cache, output, GPU, budgets and a shared
+parameter file. Task-local section overrides contain only changed values.
+It requests 2,048 environments and 1,024 distinct successes per object/gripper pair;
 adjust resource and budget settings as needed. Generation prepares missing caches
 automatically and retains native PhysX collision settings.
 
-Generation stops at the success target or a candidate, time or sampling-round limit.
+Each object/gripper pair stops at its success target or candidate, time or
+sampling-round limit. The pair's time budget excludes asset preparation and is
+checked between batches; it is not a hard deadline for the entire command.
 `insufficient_valid_grasps` and `asset_invalid` do not mean target completion.
 An existing output requires `--resume`; changed inputs, configuration or code require
 new output. Keep prepared caches with datasets for replay and viewing.
@@ -76,6 +91,8 @@ uv run --locked graspdatagen prepare --manifest configs/objects/our_assets.yaml 
 ```
 
 `prepare --cache` overrides `outputs/prepared`; use the same `cache` in the run YAML.
+Both preparation entrypoints use the gripper's calibration step rate. `inspect`
+reads the USD without starting a simulation runtime.
 `prepare` stops on invalid assets; `generate` records them and continues.
 
 ### Multiple GPUs
@@ -99,29 +116,32 @@ and its saved YAML first.
 Add `--gui` to `generate`, `replay` or `audit` from a graphical desktop with valid
 `DISPLAY` and X11 authorization. CUDA physics and Vulkan renderer GPU indices can
 differ; select rendering with `--renderer-gpu`. Unset `CUDA_VISIBLE_DEVICES` so
-Isaac Sim can match devices. On the current workstation, `book_gui.yaml` uses
-CUDA device 1 and Vulkan device 4:
+Isaac Sim can match devices. The `gui-test.yaml` example uses CUDA device 1
+and Vulkan device 4 to inspect `shampoo_000`:
 
 ```bash
 env -u CUDA_VISIBLE_DEVICES uv run --locked graspdatagen generate \
-  --config configs/runs/book_gui.yaml --gui --renderer-gpu 4
+  --config configs/runs/gui-test.yaml --gui --renderer-gpu 4
 ```
 
-This diagnostic book run keeps its final frame open until the window is closed.
+This diagnostic run keeps its final frame open until the window is closed.
 GUI replay arranges grasps in a grid; use headless replay to compare the original
 saved world placements. Closing the GUI during validation aborts the run.
 
-Generation exports `grasps.yaml` automatically. To re-export or inspect static poses:
+Generation exports `grasps-<robot>.yaml` beside the source object USD
+automatically (for example, `grasps-piper.yaml` and `grasps-arx-x5.yaml`).
+Re-exporting replaces the same robot’s file; different robots have separate
+files. To re-export:
 
 ```bash
-uv run --locked graspdatagen export --run outputs/our-assets/piper--bubble_tea_cup_300g
-uv run --locked graspdatagen view \
-  --grasps outputs/our-assets/piper--bubble_tea_cup_300g/grasps.yaml --candidate 0
+uv run --locked graspdatagen export --run outputs/our-assets-production/piper--bubble_tea_cup_300g
 ```
 
-`view` uses recorded joint positions, the adjacent `manifest.json` and prepared
-assets; no physics advances. Its candidate IDs are zero-based YAML IDs, unlike
-replay's saved IDs. For browser inspection, see [Web viewer](web-viewer.md).
+`view` only supports older run-directory YAML with an adjacent `manifest.json`;
+it uses recorded joint positions and prepared assets without advancing physics.
+Its candidate IDs are zero-based YAML IDs, unlike
+replay's saved IDs. To inspect exported YAML directly beside the source USD, use the
+[Web viewer](web-viewer.md).
 
 ## Development checks
 

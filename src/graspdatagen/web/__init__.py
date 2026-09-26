@@ -552,7 +552,7 @@ def main() -> None:
     parser.add_argument(
         "--objects",
         type=Path,
-        default=Path("configs/objects/production.yaml"),
+        default=Path("configs/objects/our_assets.yaml"),
         help="Object configuration for standalone YAML without a manifest",
     )
     parser.add_argument(
