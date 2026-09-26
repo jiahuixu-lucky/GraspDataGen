@@ -438,10 +438,14 @@ def main() -> None:
     report["worker_log"] = str(log)
     report["physics_errors"] = physics_errors(log.read_text(errors="replace"))
     report["rendering_errors"] = rendering_errors(log.read_text(errors="replace"))
-    pids = subprocess.check_output(
-        ["nvidia-smi", "--query-compute-apps=pid", "--format=csv,noheader,nounits"], text=True
-    ).split()
-    report["worker_gpu_released"] = str(report.get("worker_pid")) not in pids
+    # Inspect never creates a GPU runtime, so it needs no NVIDIA process query.
+    report["worker_gpu_released"] = True
+    if args.command != "inspect":
+        pids = subprocess.check_output(
+            ["nvidia-smi", "--query-compute-apps=pid", "--format=csv,noheader,nounits"],
+            text=True,
+        ).split()
+        report["worker_gpu_released"] = str(process.pid) not in pids
     report["complete"] = (
         process.returncode == 0
         and report.get("checks_passed") is True

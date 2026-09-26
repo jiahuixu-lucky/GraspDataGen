@@ -92,7 +92,7 @@ uv run --locked graspdatagen prepare --manifest configs/objects/our_assets.yaml 
 
 `prepare --cache` overrides `outputs/prepared`; use the same `cache` in the run YAML.
 Both preparation entrypoints use the gripper's calibration step rate. `inspect`
-reads the USD without starting a simulation runtime.
+reads the USD without starting a simulation runtime or requiring `nvidia-smi`.
 `prepare` stops on invalid assets; `generate` records them and continues.
 
 ### Multiple GPUs

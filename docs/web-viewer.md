@@ -10,8 +10,8 @@ Open http://127.0.0.1:8080. The server reads assets on the CPU without starting
 Isaac Sim or CUDA; the browser renders with Three.js.
 
 By default, it discovers `grasps-<robot>.yaml` beside object USDs listed in
-`configs/objects/our_assets.yaml`, plus legacy run datasets matching
-`outputs/**/grasps.yaml`. Standalone output YAML without a manifest must match the selected
+`configs/objects/our_assets.yaml`, plus run datasets under `outputs/` that contain
+grasp poses. Standalone output YAML without a manifest must match the selected
 object configuration. To select a dataset explicitly:
 
 ```bash

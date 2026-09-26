@@ -14,7 +14,7 @@ import numpy as np
 from fastapi import HTTPException, Request, Response
 from nicegui import app, run, ui
 
-from graspdatagen.config import load_objects
+from graspdatagen.config import load_objects, read_mapping
 from graspdatagen.web.data import load_dataset
 from graspdatagen.web.file_picker import pick_dataset
 from graspdatagen.web.transport import encode_payload
@@ -583,13 +583,23 @@ def main() -> None:
         parser.error("--overview-faces must be at least 100")
     sources = args.grasps
     if not sources:
-        sources = sorted(Path("outputs").rglob("grasps.yaml"))
-        sources += [
+        configured = load_objects(args.objects)
+        sources = [
             path
-            for o in load_objects(args.objects)
+            for o in configured
             for path in sorted(o.source.parent.glob("grasps*.yaml"))
             if path.is_file()
         ]
+        configured_names = {o.name for o in configured}
+        for path in sorted(Path("outputs").rglob("grasps.yaml")):
+            manifest = path.with_name("manifest.json")
+            if manifest.is_file():
+                if json.loads(manifest.read_text())["successes"] > 0:
+                    sources.append(path)
+            else:
+                data = read_mapping(path)
+                if data["object"] in configured_names and data["candidates"]:
+                    sources.append(path)
     sources = list(dict.fromkeys(p.resolve() for p in sources))
     if not sources or any(not p.is_file() for p in sources):
         parser.error("No grasp files found; provide existing compact YAML files with --grasps")
