@@ -241,18 +241,25 @@ def calibrate_definition(
     base = source.GetPrimAtPath(config.root_prim + "/" + config.base_body)
     body_names = robot["finger_body_names"]
     with np.load(directory / "collision_geometry.npz", allow_pickle=False) as geometry:
-        finger_indices = [
-            extraction["source_collider_order"].index("/Gripper/" + p)
-            for p in config.finger_colliders
-        ]
-        finger_meshes = [
-            trimesh.Trimesh(
-                geometry[f"mesh_{i:03d}_vertices_B_m"],
-                geometry[f"mesh_{i:03d}_faces"],
-                process=False,
-            )
-            for i in finger_indices
-        ]
+        finger_meshes = []
+        for selector in config.finger_colliders:
+            prefix = "/Gripper/" + selector
+            indices = [
+                i
+                for i, path in enumerate(extraction["source_collider_order"])
+                if path == prefix or path.startswith(prefix + "/")
+            ]
+            if not indices:
+                raise ValueError(f"No collision meshes matched finger: {selector}")
+            meshes = [
+                trimesh.Trimesh(
+                    geometry[f"mesh_{i:03d}_vertices_B_m"],
+                    geometry[f"mesh_{i:03d}_faces"],
+                    process=False,
+                )
+                for i in indices
+            ]
+            finger_meshes.append(trimesh.util.concatenate(meshes))
     centers = np.array(
         [np.mean(mesh.vertices @ config.opening_axis_base) for mesh in finger_meshes]
     )
