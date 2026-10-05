@@ -1,0 +1,23 @@
+name: airbot_play
+usd_path: outputs/adapter-assets/airbot_play.usdc
+kinematics:
+  tcp:
+    parent_frame: gripper_center
+    position_m:
+    - -0.04
+    - 0.0
+    - 0.0
+    orientation_xyzw:
+    - 0.0
+    - 0.0
+    - 0.0
+    - 1.0
+gripper:
+  joint_names:
+  - gripper_joint
+  - gripper_joint1
+  command_joint_names:
+  - gripper_joint
+  finger_body_names:
+  - left
+  - right

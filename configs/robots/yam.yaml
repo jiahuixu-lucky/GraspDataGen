@@ -1,0 +1,23 @@
+name: yam
+usd_path: outputs/adapter-assets/yam.usdc
+kinematics:
+  tcp:
+    parent_frame: tcp
+    position_m:
+    - 0.0
+    - 0.0
+    - 0.0
+    orientation_xyzw:
+    - 0.0
+    - 0.0
+    - 0.0
+    - 1.0
+gripper:
+  joint_names:
+  - dof_joint7
+  - dof_joint8
+  command_joint_names:
+  - dof_joint7
+  finger_body_names:
+  - tip_left
+  - tip_right

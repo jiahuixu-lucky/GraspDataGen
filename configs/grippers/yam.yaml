@@ -1,0 +1,49 @@
+name: yam
+robot_config: configs/robots/yam.yaml
+root_prim: /urdf_top_assembly
+base_body: gripper
+retained_bodies:
+- gripper
+- tip_left
+- tip_right
+- camera_mount
+- camera
+retained_joints:
+- Physics/dof_joint7
+- Physics/dof_joint8
+- Physics/camera_mount_joint
+- Physics/camera_joint
+tcp_parent_prim: gripper/tcp
+finger_colliders:
+- tip_left/collisions
+- tip_right/collisions
+approach_axis_base:
+- 0.0
+- 0.0
+- -1.0
+opening_axis_base:
+- 0.0
+- 1.0
+- 0.0
+wrist_up_axis_base:
+- 1.0
+- 0.0
+- 0.0
+contact_region:
+  approach_interval_m:
+  - 0.12
+  - 0.145
+  lateral_interval_m:
+  - -0.01
+  - 0.01
+  normal_alignment_min: 0.9
+material:
+  static_friction: 0.8
+  dynamic_friction: 0.8
+  restitution: 0.0
+  source: Explicit simulation friction for yam; not measured hardware friction.
+  sensitivity_friction:
+  - 0.3
+  - 0.5
+  - 0.8
+calibration: configs/calibration.yaml
