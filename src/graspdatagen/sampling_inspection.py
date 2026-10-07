@@ -17,7 +17,7 @@ from graspdatagen.geometry import matrix_poses
 from graspdatagen.records import FAILURES, CandidateBatch, PreparedPair, ValidationBatch
 from graspdatagen.storage import durable_json, write_arrays
 
-SOURCE_NAMES = ("base", "yaw")
+SOURCE_NAMES = ("base", "yaw", "local")
 OUTCOME_NAMES = (*FAILURES, "closure_posture_invalid")
 
 
@@ -31,6 +31,7 @@ def write_sampling_inspection_batch(
     source: str,
     round_index: int,
     batch_number: int,
+    measured_openings: np.ndarray,
 ) -> Path:
     """Persist continuous pre-validation inputs and their eventual P2 outcomes.
 
@@ -58,6 +59,8 @@ def write_sampling_inspection_batch(
     approach = np.einsum("nij,j->ni", batch.target[:, :3, :3], approach_tcp)
     arrays = {
         "candidate_id": batch.ids,
+        "dedup_actual_tcp_matrix": result.actual_tcp[:, 0],
+        "dedup_actual_opening_m": measured_openings,
         "pose_object_tcp_target_xyz_xyzw": matrix_poses(batch.target),
         "approach_axis_object": approach,
         "opening_m": batch.opening,
@@ -157,7 +160,7 @@ def inspect_sampling(run: Path, output: Path) -> Path:
     arrow_count = min(1000, len(positions))
     arrow_indices = np.linspace(0, len(positions) - 1, arrow_count, dtype=np.int64)
     arrow_length = max(float(np.ptp(mesh.bounds, axis=0).max()) * 0.075, 0.005)
-    colors = np.array(["#2774ae", "#e07a1f"])
+    colors = np.array(["#2774ae", "#e07a1f", "#2a9d8f"])
     views = ((90, -90, "top"), (0, -90, "front"), (0, 0, "side"))
     for column, (elevation, azimuth, title) in enumerate(views, start=1):
         axis = figure.add_subplot(2, 4, column, projection="3d")
