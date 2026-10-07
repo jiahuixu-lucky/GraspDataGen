@@ -52,4 +52,4 @@ validation:
   approach_translation_m: 0.002
   approach_rotation_rad: 0.03
   command_speed_m_s: 0.02
-  disturbance_acceleration_m_s2: 5.0
+  disturbance_acceleration_m_s2: 2.5

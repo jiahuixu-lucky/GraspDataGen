@@ -19,6 +19,7 @@ from graspdatagen.grippers import prepare_gripper
 from graspdatagen.records import FAILURES, METRICS, STAGES, CandidateBatch, PreparedPair
 from graspdatagen.runtime import GraspScene, PhysxRuntime, RuntimeConfig
 from graspdatagen.sampling import Sampler, distinct_indices
+from graspdatagen.local_expansion import expand, outside
 from graspdatagen.storage import (
     commit_checkpoint,
     durable_json,
@@ -235,6 +236,14 @@ def generate_pair(
             pending_yaw.append(
                 CandidateBatch(*(data[name] for name in CandidateBatch.__dataclass_fields__))
             )
+    pending_local = []
+    local_info = manifest.get("local_pending")
+    if local_info:
+        local_path = directory / local_info["path"]
+        if file_hash(local_path) != local_info["sha256"]:
+            raise ValueError("Corrupt local expansion queue")
+        with np.load(local_path, allow_pickle=False) as saved:
+            pending_local.append(CandidateBatch(*(saved[k] for k in CandidateBatch.__dataclass_fields__)))
     scene = GraspScene(runtime, pair, config.environments, config.validation)
     failures: Counter[str] = Counter(manifest["failures"])
     active = pair.definition["calibration"]["active_index"]
@@ -253,10 +262,18 @@ def generate_pair(
         and manifest["attempted"] < config.candidate_budget
         and time.monotonic() < deadline
     ):
-        batch_kind = "yaw" if pending_yaw else "base"
+        # Rotate queues instead of starving base sampling with targeted variants.
+        tick = manifest.get("expansion_schedule_tick", 0)
+        manifest["expansion_schedule_tick"] = tick + 1
+        preferred = ("base", "yaw", "local")[tick % 3]
+        batch_kind = preferred
+        if preferred == "yaw" and not pending_yaw:
+            batch_kind = "local" if pending_local else "base"
+        elif preferred == "local" and not pending_local:
+            batch_kind = "yaw" if pending_yaw else "base"
         remaining_target = config.target_successes - len(successful)
         requested = (
-            int(np.ceil(1.25 * remaining_target)) if batch_kind == "yaw" else 8 * remaining_target
+            int(np.ceil(1.25 * remaining_target)) if batch_kind != "base" else 8 * remaining_target
         )
         batch_limit = min(
             config.environments,
@@ -264,7 +281,14 @@ def generate_pair(
             requested,
         )
 
-        if pending_yaw:
+        if batch_kind == "local":
+            queued = pending_local.pop(0)
+            queued = outside(sampler, queued, successful, successful_openings)
+            selected = np.arange(min(batch_limit, len(queued)), dtype=np.int64)
+            batch = sampler.reserve(queued.select(selected))
+            if len(selected) < len(queued):
+                pending_local.insert(0, queued.select(np.arange(len(selected), len(queued))))
+        elif batch_kind == "yaw":
             queued = pending_yaw.pop(0)
             selected = np.arange(
                 min(batch_limit, len(queued)),
@@ -293,12 +317,25 @@ def generate_pair(
             coverage_deferrals=prior_deferrals + sampler.coverage_deferrals,
         )
         if not len(batch):
-            if batch_kind == "yaw":
+            if batch_kind != "base":
                 continue
-            manifest["stop_reason"] = (
-                "time_budget" if time.monotonic() >= deadline else "surface_rounds_exhausted"
-            )
-            break
+            if pending_yaw or pending_local:
+                # Empty base sampling: drain targeted candidates without spinning.
+                batch_kind = "local" if pending_local else "yaw"
+                queue = pending_local if pending_local else pending_yaw
+                queued = queue.pop(0)
+                if batch_kind == "local":
+                    queued = outside(sampler, queued, successful, successful_openings)
+                batch = sampler.reserve(queued.select(np.arange(min(batch_limit, len(queued)))))
+                if len(queued) > batch_limit:
+                    queue.insert(0, queued.select(np.arange(batch_limit, len(queued))))
+                if not len(batch):
+                    continue
+            else:
+                manifest["stop_reason"] = (
+                    "time_budget" if time.monotonic() >= deadline else "surface_rounds_exhausted"
+                )
+                break
         if len(batch) != scene.count:
             scene = GraspScene(runtime, pair, len(batch), config.validation)
         seeds, acceleration = trial_conditions(batch, config.validation, config.seed)
@@ -347,7 +384,13 @@ def generate_pair(
                 batch_kind,
                 sampler.round_index,
                 batch_number,
+                measured_openings,
             )
+        local_stats = manifest.setdefault("local_expansion", {"attempted": 0, "passed": 0, "accepted": 0, "queued": 0})
+        if batch_kind == "local":
+            local_stats["attempted"] += len(batch)
+            local_stats["passed"] += len(passed)
+            local_stats["accepted"] += len(accepted)
         successful = np.concatenate((successful, result.actual_tcp[accepted, 0]))
         successful_openings = np.concatenate((successful_openings, measured_openings[accepted]))
         if (
@@ -372,6 +415,12 @@ def generate_pair(
 
                 if len(variants):
                     pending_yaw.append(variants)
+        if batch_kind != "local" and len(accepted) and len(successful) < config.target_successes:
+            variants = expand(sampler, batch.select(accepted), result.actual_tcp[accepted, 0], measured_openings[accepted])
+            variants = outside(sampler, variants, successful, successful_openings)
+            if len(variants):
+                pending_local.append(variants)
+                local_stats["queued"] += len(variants)
         shard = write_arrays(
             directory / f"grasps-{batch_number:05d}.npz", result_arrays(result, accepted)
         )
@@ -400,7 +449,16 @@ def generate_pair(
             inspect_trace(pair, trace_path, directory / "inspection.png", STAGES)
         if len(successful) >= config.target_successes:
             pending_yaw.clear()
+            pending_local.clear()
 
+        local_path = directory / "local-pending.npz"
+        if pending_local:
+            queued_local = CandidateBatch(*(np.concatenate([getattr(item, k) for item in pending_local]) for k in CandidateBatch.__dataclass_fields__))
+            manifest["local_pending"] = write_arrays(local_path, {k: getattr(queued_local, k) for k in CandidateBatch.__dataclass_fields__})
+        else:
+            local_path.unlink(missing_ok=True)
+            manifest["local_pending"] = None
+        print(f"LOCAL totals: {local_stats}; pending={sum(len(b) for b in pending_local)}", flush=True)
         pending_path = directory / "yaw-pending.npz"
         if pending_yaw:
             queued = CandidateBatch(
