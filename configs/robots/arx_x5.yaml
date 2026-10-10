@@ -4,7 +4,7 @@ usd_path: Assets/Robots/x5/ARX.usd
 kinematics:
   tcp:
     parent_frame: link6
-    position_m: [0.118, 0.0, 0.0]
+    position_m: [0.13, 0.0, 0.0]
     orientation_xyzw: [0.0, 0.0, 0.0, 1.0]
 gripper:
   joint_names: [joint7, joint8]
